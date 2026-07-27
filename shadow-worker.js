@@ -273,6 +273,114 @@ function metresPerPixel(z, latDeg) {
   return (C * Math.cos(latDeg * DEG)) / (TILE_PX * Math.pow(2, z));
 }
 
+/* ---- horizon profile for an arbitrary point -------------------------------
+ *
+ * Port of hikesun/horizon.py compute_horizons() for a single point, so the
+ * address lookup can score a spot that has no precomputed profile. Same
+ * constants and the same geometry, so a result here is comparable with the
+ * trail profiles baked into the shards.
+ *
+ * Sampling uses two mosaics rather than one: the geometric radius grid puts
+ * 52 of its 64 samples inside 5 km, where resolution actually decides
+ * whether a ridge shades you, and only 12 beyond. So the near field comes
+ * from z13 (~14 m/px, matching the Python pipeline) and the far field from
+ * z11 (~55 m/px). Covering 16 km at z13 alone would need an 11x11 = 121
+ * tile stitch; this needs 9 + 25. */
+
+const AZ_BINS = 120;
+const AZ_STEP_DEG = 360.0 / AZ_BINS;
+const RAY_MIN_M = 30.0;
+const RAY_MAX_M = 16000.0;
+const RAY_STEPS = 64;
+const EYE_HEIGHT_M = 2.0;
+const HORIZON_FLOOR_DEG = -2.0;
+const R_EARTH = 6371000.0;
+const HORIZON_NEAR_Z = 13;
+const HORIZON_FAR_Z = 11;
+
+function mPerDeg(lat) {
+  const latR = lat * DEG;
+  return {
+    lon: (Math.PI / 180.0) * R_EARTH * Math.cos(latR),
+    lat: 111132.954 - 559.822 * Math.cos(2 * latR) + 1.175 * Math.cos(4 * latR),
+  };
+}
+
+function lonLatToGlobalPx(lon, lat, z) {
+  const n = TILE_PX * Math.pow(2, z);
+  const latR = lat * DEG;
+  return {
+    x: ((lon + 180.0) / 360.0) * n,
+    y: ((1.0 - Math.log(Math.tan(latR) + 1.0 / Math.cos(latR)) / Math.PI) / 2.0) * n,
+  };
+}
+
+/* bilinear elevation from a stitched mosaic; NaN outside its coverage (which
+ * is what the reference does too — a missing sample never raises the horizon) */
+function sampleMosaic(info, z, lon, lat) {
+  const { mosaic, side, originTileX, originTileY } = info;
+  const g = lonLatToGlobalPx(lon, lat, z);
+  const px = g.x - originTileX * TILE_PX;
+  const py = g.y - originTileY * TILE_PX;
+  if (!(px >= 0 && py >= 0 && px <= side - 1 && py <= side - 1)) return NaN;
+  const x0 = Math.floor(px), y0 = Math.floor(py);
+  const x1 = Math.min(x0 + 1, side - 1), y1 = Math.min(y0 + 1, side - 1);
+  const fx = px - x0, fy = py - y0;
+  const a = mosaic[y0 * side + x0], b = mosaic[y0 * side + x1];
+  const c = mosaic[y1 * side + x0], d = mosaic[y1 * side + x1];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+
+/* near mosaic first, far mosaic where the near one does not reach */
+function elevationAt(near, far, lon, lat) {
+  const e = sampleMosaic(near, HORIZON_NEAR_Z, lon, lat);
+  if (!Number.isNaN(e)) return e;
+  return sampleMosaic(far, HORIZON_FAR_Z, lon, lat);
+}
+
+async function handleHorizon(msg) {
+  const { id, lon, lat, tileUrl } = msg;
+
+  const nearG = lonLatToGlobalPx(lon, lat, HORIZON_NEAR_Z);
+  const farG = lonLatToGlobalPx(lon, lat, HORIZON_FAR_Z);
+  const near = await stitchMosaic(tileUrl, HORIZON_NEAR_Z,
+    Math.floor(nearG.x / TILE_PX), Math.floor(nearG.y / TILE_PX));
+  const far = await stitchMosaic(tileUrl, HORIZON_FAR_Z,
+    Math.floor(farG.x / TILE_PX), Math.floor(farG.y / TILE_PX));
+
+  const h0 = elevationAt(near, far, lon, lat);
+  if (Number.isNaN(h0)) {
+    self.postMessage({ id, phase: "horizon", profile: null, elev: null });
+    return;
+  }
+  const eye = h0 + EYE_HEIGHT_M;
+
+  // geometric radius grid, identical to np.geomspace(RAY_MIN_M, RAY_MAX_M, RAY_STEPS)
+  const radii = new Float64Array(RAY_STEPS);
+  const ratio = Math.pow(RAY_MAX_M / RAY_MIN_M, 1 / (RAY_STEPS - 1));
+  for (let i = 0; i < RAY_STEPS; i++) radii[i] = RAY_MIN_M * Math.pow(ratio, i);
+
+  const md = mPerDeg(lat);
+  const profile = new Float32Array(AZ_BINS);
+  for (let k = 0; k < AZ_BINS; k++) {
+    const az = (k + 0.5) * AZ_STEP_DEG * DEG;
+    const sinAz = Math.sin(az), cosAz = Math.cos(az);
+    let best = -Infinity;
+    for (let i = 0; i < RAY_STEPS; i++) {
+      const r = radii[i];
+      const h = elevationAt(near, far, lon + (r * sinAz) / md.lon,
+        lat + (r * cosAz) / md.lat);
+      if (Number.isNaN(h)) continue;
+      // curvature + refraction drop, same constant as hikesun/horizon.py
+      const ang = Math.atan2(h - eye - (r * r) / (2.0 * R_EFF_M), r) / DEG;
+      if (ang > best) best = ang;
+    }
+    profile[k] = Math.max(best, HORIZON_FLOOR_DEG);
+  }
+  self.postMessage({ id, phase: "horizon", profile: profile.buffer, elev: h0 },
+    [profile.buffer]);
+}
+
 /* ---- message handling ----------------------------------------------------- */
 
 self.onmessage = async (ev) => {
@@ -284,6 +392,10 @@ self.onmessage = async (ev) => {
     }
     if (msg.type === "render") {
       await handleRender(msg);
+      return;
+    }
+    if (msg.type === "horizon") {
+      await handleHorizon(msg);
       return;
     }
     throw new Error(`unknown message type: ${msg.type}`);

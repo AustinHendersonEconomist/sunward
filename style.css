@@ -700,3 +700,121 @@ input[type="text"] {
 
 /* Herenga ā Nuku source badge */
 .badge.hnk { background: #fdeaf2; color: #b83280; }
+
+/* ---- detail panel --------------------------------------------------------
+ * Shown in the sidebar above the results when a walk/place is selected: the
+ * whole-day sun curve, key facts, elevation profile and (at the coast) tides. */
+
+.detail {
+  margin: 0 16px 14px;
+  padding: 14px 16px 16px;
+  background: #fff;
+  border: 1px solid #fdd98a;
+  border-radius: 12px;
+  box-shadow: 0 0 0 2px rgba(253, 181, 21, 0.18), 0 8px 22px rgba(15, 23, 42, 0.09);
+}
+
+.detail[hidden] { display: none; }
+
+.detail-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.detail-head h2 { margin: 0; font-size: 1.06rem; line-height: 1.3; letter-spacing: -0.01em; }
+
+.detail-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e7ebf0;
+  border-radius: 8px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.detail-close:hover { border-color: #fdb515; background: #fffaf0; color: #1f2937; }
+
+.detail-headline { display: flex; gap: 22px; margin-top: 12px; }
+.detail-big b { display: block; font-size: 1.5rem; font-weight: 800; color: #c98a00; line-height: 1; }
+.detail-big small {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.63rem;
+  font-weight: 600;
+  color: #9aa3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-section { margin-top: 14px; }
+
+.detail-sub {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-dim { color: #9aa3af; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.detail-chart { display: block; width: 100%; height: auto; margin-top: 7px; overflow: visible; }
+.detail-chart.elev { margin-top: 5px; }
+
+.detail-now { stroke: #1f2937; stroke-width: 1.2; stroke-dasharray: 3 2; opacity: 0.65; }
+.detail-tick { font-size: 9px; fill: #9aa3af; font-family: inherit; }
+.tide-lab { font-size: 8.5px; fill: #64748b; }
+
+.detail-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 14px 0 0;
+}
+
+.detail-facts dt {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #9aa3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-facts dd { margin: 2px 0 0; font-size: 0.84rem; color: #1f2937; text-transform: capitalize; }
+
+.detail-desc {
+  margin: 13px 0 0;
+  font-size: 0.83rem;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
+.detail-link {
+  display: inline-block;
+  margin-top: 11px;
+  font-size: 0.82rem;
+  color: #3563c4;
+  text-decoration: none;
+}
+
+.detail-link:hover { text-decoration: underline; }
+
+/* tides */
+.tide-section { border-top: 1px solid #eef1f5; padding-top: 13px; }
+.tide-times { display: flex; gap: 14px; margin-top: 5px; font-size: 0.77rem; }
+.tide-low { color: #0891b2; font-weight: 600; }
+.tide-high { color: #0369a1; font-weight: 600; }
+.tide-note { margin-top: 6px; font-size: 0.7rem; line-height: 1.45; }
+
+@media (max-width: 800px) {
+  .detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .detail-headline { gap: 16px; }
+}
+
+/* address sun-hours lookup: same card chrome as the detail panel */
+.sunhours-loading { margin: 12px 0 0; font-size: 0.84rem; color: #6b7280; line-height: 1.5; }
+.sunhours-times { margin-top: 7px; font-size: 0.82rem; color: #4b5563; }
+.sunhours-times b { color: #1f2937; }
+.sunhours-note { margin-top: 12px; font-size: 0.7rem; line-height: 1.45; }
+#sunhours-btn { padding: 0 10px; }

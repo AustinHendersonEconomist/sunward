@@ -22,6 +22,9 @@
                autocomplete="off" aria-label="Start from address">
         <button type="button" id="addr-go" title="Find address">Find</button>
         <button type="button" id="locate-btn" title="Use my location" aria-label="Use my location">🧭</button>
+        <button type="button" id="sunhours-btn"
+                title="Winter sun hours at this address (terrain shading)"
+                aria-label="Winter sun hours at this address">☀</button>
         <div id="addr-results" class="addr-results" hidden></div>
       </div>
       <div id="origin-label">📍 Origin: Christchurch (default)</div>
@@ -69,6 +72,8 @@
     </form>
 
     <div id="status" class="status" hidden></div>
+    <div id="sunhours" class="detail" hidden></div>
+    <div id="detail" class="detail" hidden></div>
     <div id="results" aria-live="polite"></div>
     <footer id="credits">Data: DOC &amp; Herenga ā Nuku (CC-BY), OpenStreetMap (ODbL), LINZ, AWS Terrain Tiles, Open-Meteo. Geocoding: OSM Nominatim. Photos: Wikimedia Commons. Not an official trail guide; check conditions before you go.</footer>
   </aside>

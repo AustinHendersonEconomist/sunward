@@ -236,6 +236,8 @@ const GIBS_URL_SUFFIX = "/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png";
 const CLOUD_FRAME_LAG_MIN = 20;         // first candidate: now minus this
 const CLOUD_PROBE_TRIES = 6;            // then step back 10 min at a time
 const CLOUD_REFRESH_MS = 10 * 60 * 1000;
+const GIBS_NATIVE_MAXZOOM = 6;          // GoogleMapsCompatible_Level6 tops out here
+const MAP_MAX_ZOOM = 19;                // must match the basemap layers' maxZoom
 
 // cloudPane: above the shadow overlay (350), below the trail lines (400)
 map.createPane("cloudPane");
@@ -249,6 +251,8 @@ let cloudsEnabled = false;
 let cloudLayer = null;
 let cloudRefreshTimer = null;
 let cloudSeq = 0; // guards overlapping enable/refresh probe chains
+let cloudFrameStep = 0;             // step-back of the frame on screen
+let cloudFallbackPending = false;   // debounces the tileerror fallback
 
 function loadCloudsEnabled() {
   try {
@@ -290,11 +294,12 @@ async function probeCloudFrame(frameIso) {
   }
 }
 
-/* newest available frame time, or null if none of the candidates exists */
-async function findCloudFrame() {
-  for (let step = 0; step < CLOUD_PROBE_TRIES; step++) {
+/* Newest available frame at or older than `fromStep`, as {iso, step}, or null
+ * if none of the remaining candidates exists. */
+async function findCloudFrame(fromStep = 0) {
+  for (let step = fromStep; step < CLOUD_PROBE_TRIES; step++) {
     const iso = cloudFrameIso(step);
-    if (await probeCloudFrame(iso)) return iso;
+    if (await probeCloudFrame(iso)) return { iso, step };
   }
   return null;
 }
@@ -305,17 +310,25 @@ function syncCloudToggleUI() {
 }
 
 /* create-or-retarget the tile layer for a frame and update the caption
- * (frame time shown as NZ local wall clock) */
-function applyCloudFrame(frameIso) {
+ * (frame time shown as NZ local wall clock).
+ *
+ * maxZoom must match the map's own max (not the imagery's): a tile layer's
+ * maxZoom is the zoom past which Leaflet stops drawing the layer at all, so
+ * capping it at the Level6 native zoom made the clouds silently vanish the
+ * moment you zoomed into a trail. maxNativeZoom is the one that says "stop
+ * asking for deeper tiles, upscale instead". */
+function applyCloudFrame(frameIso, step = 0) {
   const url = gibsUrl(frameIso);
+  cloudFrameStep = step;
   if (!cloudLayer) {
     cloudLayer = L.tileLayer(url, {
       tms: false,
-      maxNativeZoom: 6,
-      maxZoom: 15,
+      maxNativeZoom: GIBS_NATIVE_MAXZOOM,
+      maxZoom: MAP_MAX_ZOOM,
       opacity: 0.55,
       pane: "cloudPane",
     });
+    cloudLayer.on("tileerror", onCloudTileError);
   } else if (cloudLayer._url !== url) {
     cloudLayer.setUrl(url);
   }
@@ -325,9 +338,38 @@ function applyCloudFrame(frameIso) {
   cloudCaption.hidden = false;
 }
 
+/* A frame can pass the single-tile probe and still 404 for the tiles the map
+ * actually wants (GIBS publishes a frame's tiles progressively, and its
+ * backends briefly disagree about whether a frame exists). Rather than leave
+ * a caption promising imagery that never paints, fall back to the next older
+ * frame. Debounced because one bad frame fires tileerror per visible tile. */
+function onCloudTileError() {
+  if (!cloudsEnabled || cloudFallbackPending) return;
+  if (cloudFrameStep + 1 >= CLOUD_PROBE_TRIES) {
+    showToast("live cloud imagery unavailable right now");
+    disableClouds();
+    return;
+  }
+  cloudFallbackPending = true;
+  const seq = cloudSeq;
+  setTimeout(async () => {
+    cloudFallbackPending = false;
+    if (seq !== cloudSeq || !cloudsEnabled) return;
+    const next = await findCloudFrame(cloudFrameStep + 1);
+    if (seq !== cloudSeq || !cloudsEnabled) return;
+    if (next == null) {
+      showToast("live cloud imagery unavailable right now");
+      disableClouds();
+      return;
+    }
+    applyCloudFrame(next.iso, next.step);
+  }, 400);
+}
+
 function disableClouds({ persist = true } = {}) {
-  cloudSeq++; // cancels any in-flight probe chain
+  cloudSeq++; // cancels any in-flight probe chain (and any pending fallback)
   cloudsEnabled = false;
+  cloudFrameStep = 0;
   if (persist) storeCloudsEnabled(false);
   clearInterval(cloudRefreshTimer);
   cloudRefreshTimer = null;
@@ -348,7 +390,7 @@ async function enableClouds({ persist = true } = {}) {
     disableClouds(); // leaves the toggle off
     return;
   }
-  applyCloudFrame(frame);
+  applyCloudFrame(frame.iso, frame.step);
   clearInterval(cloudRefreshTimer);
   cloudRefreshTimer = setInterval(refreshCloudFrame, CLOUD_REFRESH_MS);
 }
@@ -359,7 +401,7 @@ async function refreshCloudFrame() {
   const seq = cloudSeq;
   const frame = await findCloudFrame();
   if (seq !== cloudSeq || !cloudsEnabled || frame == null) return;
-  applyCloudFrame(frame);
+  applyCloudFrame(frame.iso, frame.step);
 }
 
 cloudToggleBtn.addEventListener("click", () => {
@@ -992,15 +1034,20 @@ function selectTrail(result, card) {
 
   // keep the scrubber wherever the user left it (they may have been
   // exploring shadows at another time); show this trail's sun for that time
-  loadTrailDetail(true);
+  loadTrailDetail(true, true);
   loadPhotoStrip(result);
 }
 
-function loadTrailDetail(fitMap) {
+/* fullRender: rebuild the whole detail panel (on selection). Scrubber ticks
+ * pass false so only the time-dependent parts are repainted. */
+function loadTrailDetail(fitMap, fullRender = false) {
   if (!selected) return;
   try {
     const atMs = Engine.nzEpoch(dateInput.value, minutesToHHMM(+scrub.value));
-    drawTrail(Engine.trailDetail(selected.id, atMs), fitMap);
+    const detail = Engine.trailDetail(selected.id, atMs);
+    drawTrail(detail, fitMap);
+    if (fullRender) renderDetail(detail);
+    else updateDetailNow(detail);
   } catch (err) {
     showStatus(`Could not load trail: ${err.message}`, true);
   }
@@ -1033,6 +1080,590 @@ function drawTrail(detail, fitMap) {
   const cloudPart = cloudPct == null ? "" : ` · ${cloudPct}% cloud`;
   scrubInfo.textContent =
     `${displayName(detail)} — ${pct}% of the trail in sun at ${minutesToHHMM(+scrub.value)}${cloudPart}`;
+}
+
+/* ---- address sun-hours lookup --------------------------------------------
+ * "How much winter sun does this spot get?" for any address, not just the
+ * mapped walks. Terrain only: this is bare-earth shading from ridges and
+ * hills, computed from the same DEM and the same geometry as the trail
+ * profiles. It does NOT know about buildings, fences or trees — a city
+ * section can read 7 h here and get almost none in reality. Building-level
+ * shading needs a LiDAR surface model and is a separate product. */
+
+const SUN_MIN_ELEV_DEG = 0.25;      // matches engine.js
+const SUNHOURS_STEP_MIN = 10;       // resolution of the day sweep
+const MIDWINTER = "-06-21";         // shortest day, the number that matters
+
+let sunHoursSeq = 0;
+
+/* sunlit at this instant, from a raw 120-bin profile */
+function inSunProfile(profile, elevDeg, azDeg) {
+  if (elevDeg <= SUN_MIN_ELEV_DEG) return false;
+  const bin = Math.floor((((azDeg % 360) + 360) % 360) / (360 / profile.length))
+    % profile.length;
+  return elevDeg > profile[bin];
+}
+
+/* ask a shadow worker for a horizon profile at an arbitrary point */
+function requestHorizon(lon, lat) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker("shadow-worker.js");
+    const id = `hz-${Date.now()}`;
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error("timed out reading elevation tiles"));
+    }, 60000);
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.id !== id) return;
+      clearTimeout(timer);
+      worker.terminate();
+      if (m.phase === "error") reject(new Error(m.message));
+      else if (!m.profile) reject(new Error("no elevation data covers that point"));
+      else resolve({ profile: new Float32Array(m.profile), elev: m.elev });
+    };
+    worker.onerror = (e) => {
+      clearTimeout(timer);
+      worker.terminate();
+      reject(new Error(e.message || "worker failed"));
+    };
+    const tileUrl = (typeof HIKESUN_TILE_URL !== "undefined")
+      ? HIKESUN_TILE_URL
+      : "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+    worker.postMessage({ type: "horizon", id, lon, lat, tileUrl });
+  });
+}
+
+/* Sweep a whole day at SUNHOURS_STEP_MIN and report sunlit hours plus the
+ * first and last sunlit instant. openHours is the same sweep ignoring
+ * terrain, so the difference is what the skyline costs you. */
+function sunHoursForDay(profile, lon, lat, dateStr) {
+  const slots = [];
+  let first = null;
+  let last = null;
+  for (let min = 0; min < 24 * 60; min += SUNHOURS_STEP_MIN) {
+    const ms = Engine.nzEpoch(dateStr, minutesToHHMM(min));
+    const sun = Engine.sunPosition(lat, lon, ms);
+    const lit = inSunProfile(profile, sun.elevation, sun.azimuth);
+    const up = sun.elevation > SUN_MIN_ELEV_DEG;
+    slots.push({ min, lit, up, elev: sun.elevation, az: sun.azimuth });
+    if (lit) {
+      if (first == null) first = min;
+      last = min;
+    }
+  }
+  const stepH = SUNHOURS_STEP_MIN / 60;
+  return {
+    slots,
+    hours: slots.filter((s) => s.lit).length * stepH,
+    openHours: slots.filter((s) => s.up).length * stepH,
+    first,
+    last,
+  };
+}
+
+/* horizon skyline: the profile as the wall of terrain around the point,
+ * N through E/S/W back to N, with the sun's own arc for the day over it */
+function skylineSvg(profile, slots) {
+  const W = 320, H = 84, PAD_B = 14;
+  const maxAng = Math.max(12, Math.ceil(Math.max(...profile) + 3));
+  const y = (deg) => (H - PAD_B) * (1 - Math.max(0, deg) / maxAng);
+  const x = (az) => (az / 360) * W;
+
+  const n = profile.length;
+  const step = 360 / n;
+  let wall = `M0,${H - PAD_B}`;
+  for (let k = 0; k < n; k++) {
+    wall += `L${x(k * step).toFixed(1)},${y(profile[k]).toFixed(1)}`
+      + `L${x((k + 1) * step).toFixed(1)},${y(profile[k]).toFixed(1)}`;
+  }
+  wall += `L${W},${H - PAD_B}Z`;
+
+  const arc = slots.filter((s) => s.elev > 0).map((s, i) =>
+    `${i ? "L" : "M"}${x(s.az).toFixed(1)},${y(s.elev).toFixed(1)}`).join("");
+  const dots = slots.filter((s) => s.elev > 0 && s.min % 60 === 0)
+    .map((s) => `<circle cx="${x(s.az).toFixed(1)}" cy="${y(s.elev).toFixed(1)}"`
+      + ` r="2" fill="${s.lit ? "#e09b00" : "#94a3b8"}"/>`).join("");
+
+  const labels = [[0, "N"], [90, "E"], [180, "S"], [270, "W"]].map(([a, t]) =>
+    `<text class="detail-tick" x="${x(a).toFixed(1)}" y="${H - 2}"`
+    + ` text-anchor="${a === 0 ? "start" : "middle"}">${t}</text>`).join("");
+
+  return `<svg class="detail-chart" viewBox="0 0 ${W} ${H}" role="img"
+     aria-label="Terrain skyline around this point with the sun's path">
+    <path d="${wall}" fill="#cbd5e1" opacity="0.9"/>
+    <path d="${arc}" fill="none" stroke="#e09b00" stroke-width="1.6"
+          stroke-dasharray="3 2"/>
+    ${dots}${labels}
+  </svg>`;
+}
+
+/* the sunlit part of the day as a bar: gold = sun reaches you, grey = the
+ * sun is up but behind terrain */
+function dayBarSvg(slots) {
+  const W = 320, H = 20;
+  const up = slots.filter((s) => s.up);
+  if (!up.length) return "";
+  const from = up[0].min, to = up[up.length - 1].min;
+  const span = to - from || 1;
+  const w = (SUNHOURS_STEP_MIN / span) * W;
+  const bars = up.map((s) =>
+    `<rect x="${(((s.min - from) / span) * W).toFixed(2)}" y="0"`
+    + ` width="${(w + 0.5).toFixed(2)}" height="${H}"`
+    + ` fill="${s.lit ? SUN_COLOR : SHADE_COLOR}"/>`).join("");
+  const ticks = [from, Math.round((from + to) / 2), to].map((m, i) =>
+    `<text class="detail-tick" x="${(((m - from) / span) * W).toFixed(1)}"`
+    + ` y="${H + 11}" text-anchor="${i === 0 ? "start" : i === 2 ? "end" : "middle"}">`
+    + `${minutesToHHMM(Math.round(m / 15) * 15)}</text>`).join("");
+  return `<svg class="detail-chart" viewBox="0 0 ${W} ${H + 14}" role="img"
+     aria-label="Sunlit and shaded parts of the day">${bars}${ticks}</svg>`;
+}
+
+async function runSunHours(lon, lat, label) {
+  const seq = ++sunHoursSeq;
+  const box = el("sunhours");
+  const closer = () => {
+    const b = el("sunhours-close");
+    if (b) b.addEventListener("click", () => { box.hidden = true; });
+  };
+  box.hidden = false;
+  box.innerHTML = `<div class="detail-head"><div><h2>☀ Sun at this address</h2>
+      <div class="meta">${escapeHtml(label || "")}</div></div>
+      <button type="button" class="detail-close" id="sunhours-close"
+              title="Close" aria-label="Close">×</button></div>
+    <p class="sunhours-loading">Reading elevation tiles and tracing the
+      skyline in 120 directions…</p>`;
+  closer();
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  let hz;
+  try {
+    hz = await requestHorizon(lon, lat);
+  } catch (err) {
+    if (seq !== sunHoursSeq) return;
+    box.querySelector(".sunhours-loading").textContent =
+      `Could not compute sun hours: ${err.message}`;
+    return;
+  }
+  if (seq !== sunHoursSeq) return;
+
+  const dateStr = dateInput.value || Engine.nzDateStr();
+  const winter = `${dateStr.slice(0, 4)}${MIDWINTER}`;
+  const w = sunHoursForDay(hz.profile, lon, lat, winter);
+  const today = sunHoursForDay(hz.profile, lon, lat, dateStr);
+  const lostH = Math.max(0, w.openHours - w.hours);
+
+  box.innerHTML = `
+    <div class="detail-head">
+      <div><h2>☀ Sun at this address</h2>
+        <div class="meta">${escapeHtml(label || "")}
+          <span class="chip">${Math.round(hz.elev)} m</span></div>
+      </div>
+      <button type="button" class="detail-close" id="sunhours-close"
+              title="Close" aria-label="Close">×</button>
+    </div>
+
+    <div class="detail-headline">
+      <div class="detail-big"><b>${fmtHours(w.hours)}</b>
+        <small>midwinter sun (21 Jun)</small></div>
+      <div class="detail-big"><b>${fmtHours(today.hours)}</b>
+        <small>on ${escapeHtml(dateStr)}</small></div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-sub">Midwinter day
+        <span class="detail-dim">· gold = sun reaches you, grey = behind terrain</span>
+      </div>
+      ${dayBarSvg(w.slots)}
+      <div class="sunhours-times">
+        ${w.first != null
+          ? `First sun <b>${minutesToHHMM(w.first)}</b> · last sun <b>${minutesToHHMM(w.last)}</b>`
+          : "<b>No direct sun at all on the shortest day.</b>"}
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-sub">Skyline around this point
+        <span class="detail-dim">· grey = terrain, dashed = the sun's midwinter path</span>
+      </div>
+      ${skylineSvg(hz.profile, w.slots)}
+    </div>
+
+    <dl class="detail-facts">
+      <div><dt>Terrain costs you</dt><dd>${fmtHours(lostH)} of midwinter sun</dd></div>
+      <div><dt>Sun above horizon</dt><dd>${fmtHours(w.openHours)} (flat ground)</dd></div>
+    </dl>
+
+    <div class="detail-dim sunhours-note">Bare-earth terrain only, from the
+      same DEM and geometry as the walk scores. It does not model buildings,
+      fences or trees, so a built-up section will read sunnier than it is.</div>`;
+  closer();
+}
+
+/* ---- detail panel --------------------------------------------------------
+ * Selecting a walk used to only highlight its card and draw the line. The
+ * panel surfaces what trailDetail already returns but nothing displayed: the
+ * whole-day sun curve (not just the search window), when the sun first and
+ * last reaches the track, the elevation profile, canopy/status/description —
+ * and, for anything at the coast, a tide chart. */
+
+const detailBox = el("detail");
+const SUN_LIT = 0.5;          // a slot counts as "in sun" above this fraction
+const TIDE_NEAR_KM = 25;      // farther than this from the model point = inland
+const TIDE_LOW_ELEV_M = 5;    // touches the sea/an estuary at this elevation
+
+/* minutes between timeline slots, read off the timeline itself rather than
+ * assumed, so this keeps working if SAMPLE_MIN ever changes */
+function timelineStepMin(timeline) {
+  if (!timeline || timeline.length < 2) return 10;
+  return Math.max(1, Math.round(
+    (hhmmToMinutes(timeline[1].t.slice(11, 16))
+      - hhmmToMinutes(timeline[0].t.slice(11, 16)))));
+}
+
+/* Hours of terrain sun across the timeline window, plus the first and last
+ * time the track is meaningfully lit. Trapezoidal: the timeline is a series
+ * of instants, so N samples bound N-1 intervals — summing N slots would
+ * report 9 h 10 min for an 08:00-17:00 window that is only 9 h long. */
+function sunDayStats(timeline) {
+  if (!timeline || timeline.length < 2) return null;
+  const stepH = timelineStepMin(timeline) / 60;
+  let hours = 0;
+  let first = null;
+  let last = null;
+  for (let i = 0; i < timeline.length; i++) {
+    const s = timeline[i];
+    const edge = (i === 0 || i === timeline.length - 1) ? 0.5 : 1;
+    hours += s.frac * stepH * edge;
+    if (s.frac >= SUN_LIT) {
+      if (first == null) first = s.t.slice(11, 16);
+      last = s.t.slice(11, 16);
+    }
+  }
+  const from = timeline[0].t.slice(11, 16);
+  const to = timeline[timeline.length - 1].t.slice(11, 16);
+  // the window, not the whole day: say so rather than imply a sunrise-to-sunset total
+  return { hours, first, last, from, to, clamped: first === from || last === to };
+}
+
+function fmtHours(h) {
+  const total = Math.round(h * 60);
+  return fmtMinutes(total);
+}
+
+/* Whole-day sun curve: filled area = fraction of the track in sun, with the
+ * cloud forecast as a strip along the top and a marker at the scrubber time.
+ * viewBox units; CSS scales it to the panel width. */
+function sunArcSvg(timeline, timelineCloud, nowMin) {
+  const W = 320, H = 76, PAD_T = 12;
+  const n = timeline.length;
+  if (!n) return "";
+  const x = (i) => (i / (n - 1)) * W;
+  const y = (f) => PAD_T + (1 - Math.max(0, Math.min(1, f))) * (H - PAD_T);
+
+  const line = timeline.map((s, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(s.frac).toFixed(1)}`).join("");
+  const area = `${line}L${W},${H}L0,${H}Z`;
+
+  let clouds = "";
+  if (timelineCloud && timelineCloud.some((c) => c != null)) {
+    const w = W / n;
+    clouds = timelineCloud.map((c, i) => (c == null ? "" :
+      `<rect x="${(x(i) - w / 2).toFixed(1)}" y="0" width="${w.toFixed(2)}" height="7"`
+      + ` fill="${cloudTint(c)}"/>`)).join("");
+  }
+
+  const startMin = hhmmToMinutes(timeline[0].t.slice(11, 16));
+  const endMin = hhmmToMinutes(timeline[n - 1].t.slice(11, 16));
+  let marker = "";
+  if (nowMin >= startMin && nowMin <= endMin) {
+    const mx = ((nowMin - startMin) / (endMin - startMin)) * W;
+    marker = `<line class="detail-now" x1="${mx.toFixed(1)}" y1="0" x2="${mx.toFixed(1)}" y2="${H}"/>`;
+  }
+
+  const ticks = [startMin, Math.round((startMin + endMin) / 2), endMin].map((m, i) => {
+    const tx = ((m - startMin) / (endMin - startMin)) * W;
+    const anchor = i === 0 ? "start" : i === 2 ? "end" : "middle";
+    return `<text class="detail-tick" x="${tx.toFixed(1)}" y="${H + 11}"`
+      + ` text-anchor="${anchor}">${minutesToHHMM(m)}</text>`;
+  }).join("");
+
+  return `<svg class="detail-chart" viewBox="0 0 ${W} ${H + 15}" role="img"
+     aria-label="Fraction of the track in sun through the day">
+    <defs><linearGradient id="sunGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fdb515" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#fdb515" stop-opacity="0.12"/>
+    </linearGradient></defs>
+    ${clouds}
+    <path d="${area}" fill="url(#sunGrad)"/>
+    <path d="${line}" fill="none" stroke="#e09b00" stroke-width="1.6"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    ${marker}${ticks}
+  </svg>`;
+}
+
+/* Elevation profile along the track, coloured by whether each point is in sun
+ * at the scrubber time — the same sun/shade split the map line shows. */
+function elevProfileSvg(points) {
+  const elevs = points.map((p) => p.elev_m).filter((e) => e != null);
+  if (elevs.length < 2) return "";
+  const lo = Math.min(...elevs);
+  const hi = Math.max(...elevs);
+  if (!(hi > lo)) return "";
+  const W = 320, H = 40;
+  const n = points.length;
+  const x = (i) => (i / (n - 1)) * W;
+  const y = (e) => H - ((e - lo) / (hi - lo)) * (H - 4) - 2;
+
+  let bars = "";
+  for (let i = 0; i < n - 1; i++) {
+    if (points[i].elev_m == null) continue;
+    bars += `<rect x="${x(i).toFixed(2)}" y="${y(points[i].elev_m).toFixed(1)}"`
+      + ` width="${(W / (n - 1) + 0.6).toFixed(2)}"`
+      + ` height="${(H - y(points[i].elev_m)).toFixed(1)}"`
+      + ` fill="${points[i].sun ? SUN_COLOR : SHADE_COLOR}" opacity="0.85"/>`;
+  }
+  return `<div class="detail-sub">Elevation ${Math.round(lo)}–${Math.round(hi)} m`
+    + ` <span class="detail-dim">· climb shown in sun/shade at this time</span></div>`
+    + `<svg class="detail-chart elev" viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Elevation profile, coloured by sun and shade">${bars}</svg>`;
+}
+
+/* ---- tides ---------------------------------------------------------------
+ * Open-Meteo Marine (keyless, same family as the cloud forecast) gives hourly
+ * sea level relative to MSL. It is a global tide MODEL, not LINZ's official
+ * predictions for a standard port, so the panel says so and shows how far the
+ * model point is from the walk. */
+
+const tideCache = new Map();
+
+function tideCacheKey(lat, lon, dateStr) {
+  return `${lat.toFixed(2)},${lon.toFixed(2)},${dateStr}`;
+}
+
+/* local copy so this section is identical in both UIs (web/ has no engine.js) */
+function tideDistKm(lon1, lat1, lon2, lat2) {
+  const D = Math.PI / 180;
+  const dLon = (lon2 - lon1) * D, dLat = (lat2 - lat1) * D;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * D) * Math.cos(lat2 * D) * Math.sin(dLon / 2) ** 2;
+  return 6371.0088 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function fetchTide(lat, lon, dateStr) {
+  const key = tideCacheKey(lat, lon, dateStr);
+  if (tideCache.has(key)) return tideCache.get(key);
+  const url = "https://marine-api.open-meteo.com/v1/marine"
+    + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+    + "&hourly=sea_level_height_msl&timezone=Pacific%2FAuckland"
+    + `&start_date=${dateStr}&end_date=${dateStr}`;
+  const p = fetchTimeout(url).then(async (resp) => {
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    const h = body && body.hourly;
+    if (!h || !h.time || !h.sea_level_height_msl) return null;
+    if (h.sea_level_height_msl.every((v) => v == null)) return null;
+    return {
+      times: h.time,
+      levels: h.sea_level_height_msl,
+      lat: body.latitude,
+      lon: body.longitude,
+    };
+  }).catch(() => null);
+  tideCache.set(key, p);
+  return p;
+}
+
+/* local minima/maxima of the hourly series -> high and low waters */
+function tideExtremes(levels, times) {
+  const out = [];
+  for (let i = 1; i < levels.length - 1; i++) {
+    const a = levels[i - 1], b = levels[i], c = levels[i + 1];
+    if (a == null || b == null || c == null) continue;
+    if (b >= a && b >= c && !(b === a && b === c)) out.push({ i, kind: "high", m: b });
+    else if (b <= a && b <= c && !(b === a && b === c)) out.push({ i, kind: "low", m: b });
+  }
+  return out.map((e) => ({ ...e, hhmm: times[e.i].slice(11, 16) }));
+}
+
+function tideChartSvg(tide, nowMin) {
+  const { levels, times } = tide;
+  const vals = levels.filter((v) => v != null);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || 1;
+  const W = 320, H = 64, PAD = 8;
+  const n = levels.length;
+  const x = (i) => (i / (n - 1)) * W;
+  const y = (v) => PAD + (1 - (v - lo) / span) * (H - 2 * PAD);
+
+  const pts = levels.map((v, i) => (v == null ? null : [x(i), y(v)])).filter(Boolean);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
+  const area = `${line}L${W},${H}L0,${H}Z`;
+
+  const ext = tideExtremes(levels, times);
+  const marks = ext.map((e) => {
+    const px = x(e.i), py = y(e.m);
+    const up = e.kind === "high";
+    return `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="2.6"`
+      + ` fill="${up ? "#0369a1" : "#0891b2"}"/>`
+      + `<text class="detail-tick tide-lab" x="${Math.max(16, Math.min(W - 16, px)).toFixed(1)}"`
+      + ` y="${(up ? py - 5 : py + 10).toFixed(1)}" text-anchor="middle">`
+      + `${up ? "▲" : "▼"} ${e.hhmm}</text>`;
+  }).join("");
+
+  let marker = "";
+  const mi = Math.round((nowMin / 60));
+  if (mi >= 0 && mi < n) {
+    marker = `<line class="detail-now" x1="${x(mi).toFixed(1)}" y1="0"`
+      + ` x2="${x(mi).toFixed(1)}" y2="${H}"/>`;
+  }
+
+  return `<svg class="detail-chart tide" viewBox="0 0 ${W} ${H}" role="img"
+     aria-label="Tide height through the day">
+    <defs><linearGradient id="tideGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.1"/>
+    </linearGradient></defs>
+    <path d="${area}" fill="url(#tideGrad)"/>
+    <path d="${line}" fill="none" stroke="#0284c7" stroke-width="1.6"
+          stroke-linejoin="round"/>
+    ${marker}${marks}
+  </svg>`;
+}
+
+/* Is this option at the coast? Explicit beaches always; otherwise anything
+ * that drops to about sea level (coastal tracks, estuary walks). */
+function looksCoastal(detail) {
+  if ((detail.kind || "hike") === "beach") return true;
+  const elevs = detail.points.map((p) => p.elev_m).filter((e) => e != null);
+  return elevs.length > 0 && Math.min(...elevs) <= TIDE_LOW_ELEV_M;
+}
+
+async function renderTide(detail, container) {
+  if (!looksCoastal(detail)) return;
+  const p = detail.points[0];
+  const tide = await fetchTide(p.lat, p.lon, dateInput.value);
+  if (!tide) return;
+  if (!selected || selected.id !== detail.id) return; // selection moved on
+  const km = tideDistKm(p.lon, p.lat, tide.lon, tide.lat);
+  if (km > TIDE_NEAR_KM) return; // model point is out at sea/inland — not useful
+  const ext = tideExtremes(tide.levels, tide.times);
+  const lows = ext.filter((e) => e.kind === "low").map((e) => e.hhmm).join(", ");
+  const highs = ext.filter((e) => e.kind === "high").map((e) => e.hhmm).join(", ");
+  container.insertAdjacentHTML("beforeend", `
+    <div class="detail-section tide-section">
+      <div class="detail-sub">🌊 Tide
+        <span class="detail-dim">· widest sand around low water</span>
+      </div>
+      ${tideChartSvg(tide, +scrub.value)}
+      <div class="tide-times">
+        ${lows ? `<span class="tide-low">▼ Low ${escapeHtml(lows)}</span>` : ""}
+        ${highs ? `<span class="tide-high">▲ High ${escapeHtml(highs)}</span>` : ""}
+      </div>
+      <div class="detail-dim tide-note">Modelled tide (Open-Meteo Marine),
+        ${km < 1 ? "at" : `~${Math.round(km)} km from`} this spot — not an
+        official LINZ prediction. Check a tide table before you rely on it.</div>
+    </div>`);
+}
+
+/* full panel render — called on selection, not on every scrubber tick */
+function renderDetail(detail) {
+  const stats = sunDayStats(detail.timeline);
+  const r = selected || {};
+  const kind = detail.kind || "hike";
+  const nowMin = +scrub.value;
+
+  const facts = [];
+  if (detail.length_m != null) {
+    facts.push(["Length", detail.length_m >= 1000
+      ? `${(detail.length_m / 1000).toFixed(1)} km` : `${Math.round(detail.length_m)} m`]);
+  }
+  if (detail.est_minutes != null) facts.push(["Walk time", fmtMinutes(detail.est_minutes)]);
+  if (detail.difficulty) facts.push(["Difficulty", detail.difficulty]);
+  if (r.drive_min_est != null) {
+    facts.push(["Drive", `~${Math.round(r.drive_min_est)} min (${r.drive_km.toFixed(0)} km)`]);
+  }
+  if (stats && stats.first) {
+    // still lit at a window edge -> the real first/last sun is outside it
+    facts.push(["Sun on track", `${stats.first} – ${stats.last}`
+      + (stats.clamped ? " (at least)" : "")]);
+  }
+  if (detail.region) facts.push(["Region", detail.region]);
+  if (detail.status) facts.push(["Status", detail.status]);
+
+  const canopy = canopyMeta(detail);
+  const sunNowPct = Math.round(
+    100 * (detail.points.filter((p) => p.sun).length / detail.points.length));
+
+  detailBox.innerHTML = `
+    <div class="detail-head">
+      <div>
+        <h2>${kind === "hike" ? "" : (KIND_EMOJI[kind] || "📍") + " "}${escapeHtml(displayName(detail))}</h2>
+        <div class="meta">${sourceBadge(detail.source)}
+          ${canopy || ""}
+          ${detail.category ? `<span class="chip">${escapeHtml(detail.category)}</span>` : ""}
+        </div>
+      </div>
+      <button type="button" class="detail-close" id="detail-close"
+              title="Close details" aria-label="Close details">×</button>
+    </div>
+
+    <div class="detail-headline">
+      <div class="detail-big"><b>${sunNowPct}%</b><small>in sun at ${minutesToHHMM(nowMin)}</small></div>
+      ${stats ? `<div class="detail-big"><b>${fmtHours(stats.hours)}</b>
+        <small>of sun ${stats.from}–${stats.to}</small></div>` : ""}
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-sub">☀ Sun through the day
+        <span class="detail-dim">· terrain only; grey strip = cloud forecast</span>
+      </div>
+      ${sunArcSvg(detail.timeline, r.timeline_cloud, nowMin)}
+    </div>
+
+    ${facts.length ? `<dl class="detail-facts">${facts.map(([k, v]) =>
+      `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join("")}</dl>` : ""}
+
+    <div class="detail-section">${elevProfileSvg(detail.points)}</div>
+
+    ${detail.description ? `<p class="detail-desc">${escapeHtml(detail.description)}</p>` : ""}
+    ${detail.url ? `<a class="detail-link" href="${escapeHtml(detail.url)}"
+       target="_blank" rel="noopener">More about this ${kind === "hike" ? "track" : kind} ↗</a>` : ""}
+  `;
+  detailBox.hidden = false;
+  el("detail-close").addEventListener("click", closeDetail);
+  renderTide(detail, detailBox);
+  detailBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/* cheap refresh while the scrubber moves: only the bits that depend on time */
+function updateDetailNow(detail) {
+  if (detailBox.hidden || !detail) return;
+  const nowMin = +scrub.value;
+  const big = detailBox.querySelector(".detail-big b");
+  const lab = detailBox.querySelector(".detail-big small");
+  if (big && lab) {
+    big.textContent = `${Math.round(
+      100 * (detail.points.filter((p) => p.sun).length / detail.points.length))}%`;
+    lab.textContent = `in sun at ${minutesToHHMM(nowMin)}`;
+  }
+  const chartHost = detailBox.querySelector(".detail-section");
+  if (chartHost) {
+    const old = chartHost.querySelector("svg.detail-chart");
+    if (old) old.outerHTML = sunArcSvg(detail.timeline, (selected || {}).timeline_cloud, nowMin);
+  }
+  const elevHost = detailBox.querySelectorAll(".detail-section")[1];
+  if (elevHost) elevHost.innerHTML = elevProfileSvg(detail.points);
+}
+
+function closeDetail() {
+  detailBox.hidden = true;
+  detailBox.innerHTML = "";
+  selected = null;
+  trailLayer.clearLayers();
+  for (const c of resultsBox.querySelectorAll(".card")) c.classList.remove("selected");
+  scrubInfo.textContent = shadowsEnabled
+    ? `Terrain shadows at ${minutesToHHMM(+scrub.value)} — click a trail to see its sunlight`
+    : `${minutesToHHMM(+scrub.value)} — turn on 🌗 Shadows, or click a trail`;
 }
 
 /* cloud fraction (0-100) at the scrubber's current time for the selected
@@ -1070,6 +1701,15 @@ scrub.addEventListener("input", () => {
 /* date change also drives the shadow overlay (bound to both the scrubber
  * and the date input, per the plan) */
 dateInput.addEventListener("change", () => scheduleShadowUpdate());
+
+/* ---- address sun hours trigger ------------------------------------------- */
+
+const sunHoursBtn = el("sunhours-btn");
+if (sunHoursBtn) {
+  sunHoursBtn.addEventListener("click", () => {
+    runSunHours(origin.lon, origin.lat, origin.label);
+  });
+}
 
 /* ---- rank toggle ---------------------------------------------------------- */
 
