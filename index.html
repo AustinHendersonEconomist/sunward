@@ -69,6 +69,9 @@
       </div>
       <p id="rank-lock-note" class="rank-lock-note" hidden>Forecast unavailable for this date — ranking by terrain sun.</p>
       <button type="submit" id="search-btn">Search sunny hikes</button>
+      <button type="button" id="now-btn" class="now-btn"
+              title="Rank everything in range by whether the sun is on it this minute">☀ Sunny right now</button>
+      <p id="now-note" class="now-note" hidden></p>
     </form>
 
     <div id="status" class="status" hidden></div>
@@ -93,6 +96,9 @@
       <button type="button" id="showall-toggle"
               title="Mark every walk, beach, park and reserve in range on the map — not just the sunniest few. Great for exploring a new area."
               aria-pressed="false">🗺 Show all</button>
+      <button type="button" id="area-auto"
+              title="Re-search automatically whenever you pan or zoom the map. Drive times still measure from your origin."
+              aria-pressed="false">🔄 Search as I move</button>
       <button type="button" id="origin-arm" title="Set origin by clicking the map">📍 Set origin</button>
     </div>
     <div id="photo-strip" class="photo-strip" hidden>
@@ -100,6 +106,8 @@
       <span id="photo-credit" class="photo-credit" hidden>photos:
         <a href="https://commons.wikimedia.org/" target="_blank" rel="noopener">Wikimedia Commons</a></span>
     </div>
+    <button type="button" id="area-search" class="area-search" hidden>
+      🔍 Search this area</button>
     <div id="map"></div>
     <div id="toast" class="toast" role="status"></div>
     <div class="legend">

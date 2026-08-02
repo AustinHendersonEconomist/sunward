@@ -324,6 +324,7 @@ const Engine = (() => {
    * of the batched forecast fetch). */
   async function search({ lat, lon, driveMin = 30, startMs, minMinutes = null,
                           maxMinutes = null, difficulties = null, kinds = null,
+                          bounds = null,
                           limit = 20, useWeather = true, rankBy = "forecast" }) {
     if (rankBy !== "forecast" && rankBy !== "terrain") {
       throw new Error(`search: rankBy must be "forecast" or "terrain", got ${rankBy}`);
@@ -332,7 +333,7 @@ const Engine = (() => {
     // keep only the top `limit` so the (single) batched forecast call covers
     // exactly the trails we return.
     const candidates = gatherCandidates({ lat, lon, driveMin, startMs,
-      minMinutes, maxMinutes, difficulties, kinds });
+      minMinutes, maxMinutes, difficulties, kinds, bounds });
     const kept = candidates.slice(0, limit);
 
     const cloudDate = nzDateStr(startMs);
@@ -410,9 +411,23 @@ const Engine = (() => {
   /* Every in-range, filter-passing trail, terrain-scored and sorted by
    * terrain sun (ties by ascending id). Shared by search() and
    * candidatesInRange(). opts.kinds: array/Set of kinds, or null = all. */
+  /* `bounds` is [[south, west], [north, east]] — when given it REPLACES the
+   * drive-radius filter, so "what is in view" decides which walks are
+   * considered. (lat, lon) still matters: it is what drive distances are
+   * measured from, so a result panned to on the far side of the island still
+   * reports an honest drive time from wherever the user actually is. */
+  function inBounds(bounds, lon, lat) {
+    const [[s, w], [n, e]] = bounds;
+    if (lat < s || lat > n) return false;
+    return w <= e
+      ? (lon >= w && lon <= e)
+      : (lon >= w || lon <= e);       // the map has been dragged across 180E
+  }
+
   function gatherCandidates({ lat, lon, driveMin = 30, startMs,
                               minMinutes = null, maxMinutes = null,
-                              difficulties = null, kinds = null }) {
+                              difficulties = null, kinds = null,
+                              bounds = null }) {
     const d = requireData();
     const radiusKm = driveMin * DRIVE_KM_PER_MIN;
     const kindSet = kinds == null
@@ -422,7 +437,9 @@ const Engine = (() => {
       if (!trail.start) continue;
       if (kindSet != null && !kindSet.has(trailKind(trail))) continue;
       const distKm = haversineKm(lon, lat, trail.start[0], trail.start[1]);
-      if (distKm > radiusKm) continue;
+      if (bounds) {
+        if (!inBounds(bounds, trail.start[0], trail.start[1])) continue;
+      } else if (distKm > radiusKm) continue;
       const est = trail.est_minutes;
       if (minMinutes != null && (est == null || est < minMinutes)) continue;
       if (maxMinutes != null && (est == null || est > maxMinutes)) continue;
@@ -466,6 +483,150 @@ const Engine = (() => {
       timeline: terrainScore.timeline,
       timeline_cloud: terrainScore.timeline_cloud,
     }));
+  }
+
+
+  /* ---- route planning -------------------------------------------------------
+   *
+   * A trail gets one sun score, but a two-hour loop passes through sun and
+   * shade, and the DIRECTION you walk it changes everything: one way you take
+   * the sunny face in the morning, the other you are in its shadow. Nothing
+   * else can answer this, because it needs per-point skylines AND the walker's
+   * position as a function of time.
+   *
+   * Cost is the catch. Naively this is (start times x directions x points)
+   * solar-position calls — tens of thousands. But the sun's position depends
+   * only on the CLOCK, not on which walker is where, so it is precomputed once
+   * on a 5-minute grid for the day and every arrival snaps to the nearest
+   * slot. That turns the inner loop into an array lookup and a horizon-bin
+   * compare, and the whole sweep into a few hundred solar evaluations.
+   */
+
+  const ROUTE_SLOT_MIN = 5;
+
+  function minutesToHHMM_(total) {
+    const h = Math.floor(total / 60), m = Math.round(total) % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  /* Signed area of the trail's footprint (shoelace, in lon/lat — we only need
+   * the SIGN). Positive means the points wind anticlockwise on a north-up map,
+   * which lets a loop be described the way a walker thinks about it. */
+  function windingSign(points) {
+    let a = 0;
+    for (let i = 0; i < points.length; i++) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[(i + 1) % points.length];
+      a += x1 * y2 - x2 * y1;
+    }
+    return a >= 0 ? 1 : -1;
+  }
+
+  function isLoop(trail) {
+    const p = trail.points;
+    if (p.length < 4) return false;
+    const [lon1, lat1] = p[0];
+    const [lon2, lat2] = p[p.length - 1];
+    return haversineKm(lon1, lat1, lon2, lat2) * 1000 < 250;
+  }
+
+  /* Human labels for the two ways round. A loop is clockwise or anticlockwise;
+   * anything else is described by the end you set off from. */
+  function directionLabels(trail) {
+    if (isLoop(trail)) {
+      const anti = windingSign(trail.points) > 0;
+      return anti
+        ? { forward: "anticlockwise", reverse: "clockwise" }
+        : { forward: "clockwise", reverse: "anticlockwise" };
+    }
+    const p = trail.points;
+    const northFirst = p[0][1] > p[p.length - 1][1];
+    return northFirst
+      ? { forward: "from the north end", reverse: "from the south end" }
+      : { forward: "from the south end", reverse: "from the north end" };
+  }
+
+  /* Best direction and start time for a walk on `dateStr`.
+   *
+   * Walks the trail at a constant pace over est_minutes, samples whether each
+   * point is sunlit at the time the walker would actually be standing on it,
+   * and reports the fraction of the walk spent in sun. */
+  function routePlan(id, dateStr, opts = {}) {
+    const d = requireData();
+    const trail = d.byId.get(id);
+    if (!trail) throw new Error(`no trail with id ${id}`);
+
+    const stepMin = opts.stepMin || 30;
+    const fromMin = opts.fromMin != null ? opts.fromMin : 6 * 60;
+    const toMin = opts.toMin != null ? opts.toMin : 18 * 60;
+    const durMin = Math.max(10, trail.est_minutes != null ? trail.est_minutes : 60);
+    const pts = trail.points;
+    const n = pts.length;
+
+    // Solar positions on a 5-minute grid covering every arrival time we might
+    // ask about, computed once at the trail's first point (across <=25 km the
+    // difference is well inside one azimuth bin, same assumption as scoreTrail).
+    const gridFrom = fromMin;
+    const gridTo = toMin + durMin;
+    const nSlots = Math.ceil((gridTo - gridFrom) / ROUTE_SLOT_MIN) + 1;
+    const elev = new Float64Array(nSlots);
+    const azim = new Float64Array(nSlots);
+    for (let k = 0; k < nSlots; k++) {
+      const m = gridFrom + k * ROUTE_SLOT_MIN;
+      const s = sunPosition(pts[0][1], pts[0][0],
+                            nzEpoch(dateStr, minutesToHHMM_(m)));
+      elev[k] = s.elevation;
+      azim[k] = s.azimuth;
+    }
+    const slotAt = (m) => {
+      const k = Math.round((m - gridFrom) / ROUTE_SLOT_MIN);
+      return k < 0 ? 0 : (k >= nSlots ? nSlots - 1 : k);
+    };
+
+    const options = [];
+    for (let start = fromMin; start <= toMin; start += stepMin) {
+      for (const reverse of [false, true]) {
+        let sunny = 0;
+        for (let i = 0; i < n; i++) {
+          // position along the walk, 0..1, then the clock time there
+          const f = n === 1 ? 0 : i / (n - 1);
+          const k = slotAt(start + f * durMin);
+          const idx = reverse ? (n - 1 - i) : i;
+          if (inSun(trail.hoff + idx, elev[k], azim[k])) sunny++;
+        }
+        options.push({
+          start_min: start,
+          start: minutesToHHMM_(start),
+          reverse,
+          frac: sunny / n,
+        });
+      }
+    }
+
+    const labels = directionLabels(trail);
+    for (const o of options) o.direction = o.reverse ? labels.reverse : labels.forward;
+
+    // A tie on sun should go to the earlier start, not to whichever the loop
+    // happened to reach first.
+    const rank = (a, b) => (b.frac - a.frac) || (a.start_min - b.start_min);
+    const sorted = options.slice().sort(rank);
+    const best = sorted[0];
+    const bestForward = options.filter((o) => !o.reverse).sort(rank)[0];
+    const bestReverse = options.filter((o) => o.reverse).sort(rank)[0];
+
+    return {
+      trail_id: trail.id,
+      date: dateStr,
+      duration_min: durMin,
+      is_loop: isLoop(trail),
+      labels,
+      options,
+      best,
+      best_forward: bestForward,
+      best_reverse: bestReverse,
+      // what the choice is actually worth: best against the median option
+      spread: best.frac - sorted[Math.floor(sorted.length / 2)].frac,
+    };
   }
 
   /* Full detail for one trail: metadata, geometry, per-point sun state at
@@ -655,7 +816,7 @@ const Engine = (() => {
   return {
     sunPosition, nzEpoch, isoNZ, nzDateStr, loadIndex, ensureCells, inSun,
     scoreTrail, search, candidatesInRange, trailDetail, getCloudCover,
-    getCloudSeries, getCloudSeriesBatch,
+    getCloudSeries, getCloudSeriesBatch, routePlan, haversineKm,
   };
 })();
 

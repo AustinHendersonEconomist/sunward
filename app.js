@@ -539,7 +539,9 @@ function setOrigin(lon, lat, label, opts = {}) {
   } catch (err) { /* private mode etc. — origin just won't persist */ }
   originMarker.setLatLng([lat, lon]);
   el("origin-label").textContent = `📍 Origin: ${label}`;
-  if (opts.recenter) map.setView([lat, lon], Math.max(map.getZoom(), 11));
+  if (opts.recenter) {
+    suppressMove(() => map.setView([lat, lon], Math.max(map.getZoom(), 11)));
+  }
   showToast("Origin set");
   runSearch();
 }
@@ -676,7 +678,9 @@ function selectedKinds() {
   return checked.flatMap((b) => b.value.split(","));
 }
 
-async function runSearch() {
+/* `area: true` searches the map's current bounds instead of the drive radius.
+ * The origin is left where it is, so drive times still read from home. */
+async function runSearch({ area = false } = {}) {
   if (!engineReady) return; // index not loaded (message already shown)
   const btn = el("search-btn");
   const seq = ++searchSeq;
@@ -688,9 +692,21 @@ async function runSearch() {
     const driveMin = Number(el("drive-min").value) || 30;
     const startMs = Engine.nzEpoch(dateStr, timeStr);
 
-    // make sure the regional data shards covering the drive radius are in
+    const view = map.getBounds();
+    const bounds = area
+      ? [[view.getSouth(), view.getWest()], [view.getNorth(), view.getEast()]]
+      : null;
+
+    // Load the shards covering whatever is being searched: the drive radius,
+    // or the viewport plus a margin when searching an area.
     showStatus("Loading region data…");
-    await Engine.ensureCells([origin.lon, origin.lat], driveMin * DRIVE_KM_PER_MIN);
+    if (area) {
+      const c = view.getCenter();
+      const halfKm = map.distance(view.getSouthWest(), view.getNorthEast()) / 2000;
+      await Engine.ensureCells([c.lng, c.lat], halfKm);
+    } else {
+      await Engine.ensureCells([origin.lon, origin.lat], driveMin * DRIVE_KM_PER_MIN);
+    }
     if (seq !== searchSeq) return; // superseded by a newer search
 
     const minM = el("min-minutes").value;
@@ -699,7 +715,7 @@ async function runSearch() {
       .map((c) => c.value);
     // shared by the ranked search and the "show all on map" candidate sweep
     lastSearchOpts = {
-      lat: origin.lat, lon: origin.lon, driveMin, startMs,
+      lat: origin.lat, lon: origin.lon, driveMin, startMs, bounds,
       minMinutes: minM ? Number(minM) : null,
       maxMinutes: maxM ? Number(maxM) : null,
       difficulties: checked.length ? checked : null,
@@ -710,7 +726,9 @@ async function runSearch() {
     });
     if (seq !== searchSeq) return; // superseded by a newer search
     lastResults = results;
+    lastSearchBounds = view;   // any search anchors 'moved since'
     renderResults(results);
+    if (typeof syncAreaUi === "function") syncAreaUi();
   } catch (err) {
     if (seq !== searchSeq) return;
     resultsBox.innerHTML = "";
@@ -837,7 +855,11 @@ function renderMarkers() {
     showStatus(`${lastResults.length} sunniest listed · ${list.length}`
       + `${truncated ? "+" : ""} shown on the map — click any marker.`);
   } else {
-    showStatus(`${lastResults.length} trail${lastResults.length > 1 ? "s" : ""} found, sunniest first.`);
+    // say WHICH filter produced these, since the two answer different questions
+    const where = (lastSearchOpts && lastSearchOpts.bounds)
+      ? "in view" : "within your drive";
+    showStatus(`${lastResults.length} trail${lastResults.length > 1 ? "s" : ""}`
+      + ` ${where}, sunniest first.`);
   }
 }
 
@@ -1072,7 +1094,9 @@ function drawTrail(detail, fitMap) {
     }).addTo(trailLayer);
   }
 
-  if (fitMap) map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
+  if (fitMap) {
+    suppressMove(() => map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] }));
+  }
 
   const sunny = pts.filter((p) => p.sun).length;
   const pct = Math.round((100 * sunny) / pts.length);
@@ -1631,6 +1655,7 @@ function renderDetail(detail) {
   `;
   detailBox.hidden = false;
   el("detail-close").addEventListener("click", closeDetail);
+  renderRoutePlan(detail, detailBox);
   renderTide(detail, detailBox);
   detailBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -1761,3 +1786,268 @@ form.addEventListener("submit", (ev) => {
   }
   runSearch();
 })();
+
+/* ---- sunny right now -----------------------------------------------------
+ * Sunward answers a planning question well — where should I go on Saturday.
+ * This answers the one people actually have: it is 11am on a changeable day,
+ * where is the sun ON right now. Same engine, but pinned to this minute and
+ * ranked with the cloud forecast in, because "sunny now" that ignores the
+ * cloud overhead is worse than useless. */
+
+function nowMinutesNZ() {
+  const nz = new Date(Date.now()).toLocaleTimeString("en-NZ", {
+    timeZone: "Pacific/Auckland", hour12: false,
+    hour: "2-digit", minute: "2-digit",
+  });
+  const [h, m] = nz.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/* First and last minute the sun is above the horizon at the origin today,
+ * so the button can tell the truth when it is asked after dark. */
+function daylightWindowNZ(dateStr) {
+  let first = null, last = null;
+  for (let m = 0; m < 24 * 60; m += 10) {
+    const s = Engine.sunPosition(origin.lat, origin.lon,
+                                 Engine.nzEpoch(dateStr, minutesToHHMM(m)));
+    if (s.elevation > 0) {
+      if (first == null) first = m;
+      last = m;
+    }
+  }
+  return { first, last };
+}
+
+/* The button's own explanation line. runSearch() owns #status and will
+ * overwrite it, so anything the user needs to keep reading lives here. */
+function nowNote(msg) {
+  const n = el("now-note");
+  if (!n) return;
+  n.textContent = msg || "";
+  n.hidden = !msg;
+}
+
+function sunnyNow() {
+  nowNote("");
+  const mins = nowMinutesNZ();
+  const today = Engine.nzDateStr();
+  const day = daylightWindowNZ(today);
+
+  // Asked after dark, the honest answer is not a list of twenty sunny walks.
+  // Say so, and show tomorrow morning instead of pretending.
+  const afterDark = day.first == null || mins > day.last;
+  const beforeDawn = day.first != null && mins < day.first;
+
+  let useDate = today;
+  let useMin = mins;
+  let note = null;
+  if (afterDark) {
+    useDate = Engine.nzDateStr(Engine.nzEpoch(today, "12:00") + 24 * 3600e3);
+    useMin = daylightWindowNZ(useDate).first;
+    if (useMin == null) useMin = 9 * 60;
+    note = (t) => `The sun set at ${minutesToHHMM(day.last)}. Showing tomorrow`
+      + ` morning from ${t} instead.`;
+  } else if (beforeDawn) {
+    useMin = day.first;
+    note = (t) => `The sun is not up yet. Showing from first light, ${t}.`;
+  }
+
+  dateInput.value = useDate;
+  // snap BEFORE writing the note, so it quotes the time actually searched
+  const snapped = Math.round(useMin / 15) * 15;
+  if (note) nowNote(note(minutesToHHMM(snapped)));
+  timeInput.value = minutesToHHMM(snapped);
+  // keep the scrubber honest: it drives the shadows, so put it on the same time
+  scrub.value = Math.min(+scrub.max, Math.max(+scrub.min, snapped));
+  scrubLabel.textContent = minutesToHHMM(+scrub.value);
+  if (!rankLocked) setRankMode("forecast");
+  scheduleShadowUpdate();
+  runSearch();
+}
+
+const nowBtn = el("now-btn");
+if (nowBtn) nowBtn.addEventListener("click", sunnyNow);
+
+
+/* ---- which way round, and when -------------------------------------------
+ * A trail gets one score, but a long walk passes through sun and shade and
+ * the direction you take it changes the answer — on the Little River rail
+ * trail it is the difference between 68% and 94% of the walk in sun. */
+
+function fmtPct(f) { return `${Math.round(f * 100)}%`; }
+
+function renderRoutePlan(detail, container) {
+  let plan;
+  try {
+    plan = Engine.routePlan(detail.id, dateInput.value);
+  } catch (err) {
+    return; // no geometry or no horizons for this one — just omit the section
+  }
+  const b = plan.best;
+  const fwd = plan.best_forward, rev = plan.best_reverse;
+  const dirMatters = Math.abs(fwd.frac - rev.frac) >= 0.05;
+  const timeMatters = plan.spread >= 0.1;
+
+  // nothing useful to say about a walk that is sunny whenever and whichever
+  // way you do it — better to stay quiet than pad the panel
+  if (!dirMatters && !timeMatters && b.frac > 0.98) return;
+
+  const other = b.reverse ? fwd : rev;
+  const dirLine = dirMatters
+    ? `<div class="rp-row">Going <b>${escapeHtml(b.direction)}</b> keeps you in sun
+       ${fmtPct(b.frac)} of the way; the other way round,
+       ${fmtPct(other.frac)}.</div>`
+    : `<div class="rp-row">Direction barely matters here — either way is about
+       ${fmtPct(b.frac)}.</div>`;
+  const timeLine = timeMatters
+    ? `<div class="rp-row">Timing matters more: starting at <b>${b.start}</b>
+       beats the middling start by ${Math.round(plan.spread * 100)} points.</div>`
+    : "";
+
+  container.insertAdjacentHTML("beforeend", `
+    <div class="detail-section rp">
+      <div class="detail-sub">🧭 Best way round
+        <span class="detail-dim">· ${fmtMinutes(plan.duration_min)} at a steady pace</span>
+      </div>
+      <div class="rp-head"><b>${b.start}</b>, ${escapeHtml(b.direction)}
+        <span class="rp-frac">${fmtPct(b.frac)} in sun</span></div>
+      ${dirLine}${timeLine}
+      ${routeSparkSvg(plan)}
+      <div class="detail-dim rp-note">Assumes a steady pace over the whole
+        walk, and terrain shade only — cloud is handled separately.</div>
+    </div>`);
+}
+
+/* Two lines, one per direction: sunlit fraction against start time. Where
+ * they diverge is exactly where the choice is worth making. */
+function routeSparkSvg(plan) {
+  const W = 320, H = 54, PAD = 10;
+  const starts = [...new Set(plan.options.map((o) => o.start_min))].sort((a, b) => a - b);
+  if (starts.length < 2) return "";
+  const x = (m) => ((m - starts[0]) / (starts[starts.length - 1] - starts[0])) * W;
+  const y = (f) => PAD + (1 - f) * (H - 2 * PAD);
+  const line = (rev) => plan.options.filter((o) => o.reverse === rev)
+    .sort((a, b) => a.start_min - b.start_min)
+    .map((o, i) => `${i ? "L" : "M"}${x(o.start_min).toFixed(1)},${y(o.frac).toFixed(1)}`)
+    .join("");
+  const b = plan.best;
+  return `<svg class="detail-chart rp-spark" viewBox="0 0 ${W} ${H + 13}" role="img"
+     aria-label="Fraction of the walk in sun against start time, both directions">
+    <path d="${line(false)}" fill="none" stroke="#fdb515" stroke-width="1.8"/>
+    <path d="${line(true)}" fill="none" stroke="#7dd3fc" stroke-width="1.8"
+          stroke-dasharray="4 3"/>
+    <circle cx="${x(b.start_min).toFixed(1)}" cy="${y(b.frac).toFixed(1)}" r="3.2"
+            fill="#1f2937"/>
+    <text class="detail-tick" x="0" y="${H + 10}">${minutesToHHMM(starts[0])}</text>
+    <text class="detail-tick" x="${W}" y="${H + 10}" text-anchor="end">
+      ${minutesToHHMM(starts[starts.length - 1])}</text>
+  </svg>`;
+}
+
+/* ---- search this area ----------------------------------------------------
+ * The drive-radius search answers "where should I go from home". Panning the
+ * map asks a different question — "what about over there" — and previously the
+ * only way to ask it was to move the origin pin, which also threw away your
+ * drive time from home.
+ *
+ * So an area search REPLACES the radius filter with the map's bounds and
+ * leaves the origin alone: what is considered is what you can see, while the
+ * drive time on each card is still measured from wherever you actually are.
+ *
+ * The trap here is a feedback loop. Selecting a trail fits the map to it, and
+ * an address search recentres — both fire `moveend`. Either would kick off a
+ * search that moves the map again. `suppressMove()` marks the moves the app
+ * makes itself so only a real pan or zoom counts.
+ */
+
+const AREA_AUTO_KEY = "hikesun-area-auto";
+const AREA_MAX_KM = 220;      // refuse to search a viewport wider than this
+const AREA_MOVE_FRAC = 0.15;  // recentre by this much of the view to offer again
+
+let autoArea = loadAutoArea();
+let lastSearchBounds = null;  // Leaflet bounds used by the last search
+let programmaticMove = 0;     // >0 while the app is moving the map itself
+let areaTimer = null;
+
+function loadAutoArea() {
+  try {
+    return localStorage.getItem(AREA_AUTO_KEY) === "on";
+  } catch (err) { return false; }
+}
+
+/* Wrap a map move the APP makes, so it is not mistaken for the user panning. */
+function suppressMove(fn) {
+  programmaticMove++;
+  try { fn(); } finally {
+    // moveend fires asynchronously after an animated move
+    setTimeout(() => { programmaticMove = Math.max(0, programmaticMove - 1); }, 400);
+  }
+}
+
+function viewportKm() {
+  const b = map.getBounds();
+  return Engine.haversineKm
+    ? Engine.haversineKm(b.getWest(), b.getSouth(), b.getEast(), b.getNorth())
+    : map.distance(b.getSouthWest(), b.getNorthEast()) / 1000;
+}
+
+/* Has the user moved far enough that offering a re-search is useful? */
+function movedSinceSearch() {
+  if (!lastSearchBounds) return true;
+  const now = map.getBounds();
+  const c1 = lastSearchBounds.getCenter();
+  const c2 = now.getCenter();
+  const span = map.distance(now.getSouthWest(), now.getNorthEast());
+  if (!span) return true;
+  if (map.distance(c1, c2) > span * AREA_MOVE_FRAC) return true;
+  // a zoom change moves no centre but changes what is in view
+  const prevSpan = map.distance(lastSearchBounds.getSouthWest(),
+                                lastSearchBounds.getNorthEast());
+  return prevSpan > 0 && Math.abs(Math.log(span / prevSpan)) > 0.35;
+}
+
+function syncAreaUi() {
+  const btn = el("area-search");
+  const auto = el("area-auto");
+  if (auto) {
+    auto.classList.toggle("on", autoArea);
+    auto.setAttribute("aria-pressed", String(autoArea));
+  }
+  if (!btn) return;
+  const tooBig = viewportKm() > AREA_MAX_KM;
+  // nothing to re-search until a first search has happened, and no point
+  // offering it while the map still shows what was just searched
+  const offer = engineReady && !autoArea && lastSearchOpts != null
+    && movedSinceSearch();
+  btn.textContent = tooBig ? "Zoom in to search this area" : "🔍 Search this area";
+  btn.disabled = tooBig;
+  btn.hidden = !offer;
+}
+
+map.on("moveend zoomend", () => {
+  if (programmaticMove > 0) return;      // the app moved the map, not the user
+  if (!engineReady) return;
+  if (autoArea) {
+    if (viewportKm() > AREA_MAX_KM) { syncAreaUi(); return; }
+    clearTimeout(areaTimer);
+    areaTimer = setTimeout(() => runSearch({ area: true }), 450);
+    return;
+  }
+  syncAreaUi();
+});
+
+const areaBtn = el("area-search");
+if (areaBtn) {
+  areaBtn.addEventListener("click", () => runSearch({ area: true }));
+}
+
+const areaAutoBtn = el("area-auto");
+if (areaAutoBtn) {
+  areaAutoBtn.addEventListener("click", () => {
+    autoArea = !autoArea;
+    try { localStorage.setItem(AREA_AUTO_KEY, autoArea ? "on" : "off"); }
+    catch (err) { /* private mode — the preference just will not persist */ }
+    syncAreaUi();
+    if (autoArea && movedSinceSearch()) runSearch({ area: true });
+  });
+}

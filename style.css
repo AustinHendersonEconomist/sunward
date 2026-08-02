@@ -818,3 +818,82 @@ input[type="text"] {
 .sunhours-times b { color: #1f2937; }
 .sunhours-note { margin-top: 12px; font-size: 0.7rem; line-height: 1.45; }
 #sunhours-btn { padding: 0 10px; }
+
+/* "sunny right now": the impulse question, not the planning one */
+.now-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px;
+  border: 1px solid #fdb515;
+  border-radius: 9px;
+  background: #fffaf0;
+  color: #8a5d00;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.now-btn:hover { background: #fdb515; color: #10192e; box-shadow: 0 4px 14px rgba(253,181,21,0.3); }
+
+/* route plan */
+.rp-head { margin-top: 7px; font-size: 1rem; color: #1f2937; }
+.rp-head b { color: #c98a00; }
+.rp-frac { float: right; font-weight: 700; color: #c98a00; }
+.rp-row { margin-top: 6px; font-size: 0.82rem; line-height: 1.45; color: #4b5563; }
+.rp-row b { color: #1f2937; }
+.rp-spark { margin-top: 8px; }
+.rp-note { margin-top: 6px; font-size: 0.7rem; line-height: 1.45; }
+.now-note {
+  margin: 7px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fffaf0;
+  border-left: 3px solid #fdb515;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #8a5d00;
+}
+.now-note[hidden] { display: none; }
+
+/* ---- search this area ---------------------------------------------------
+ * Floating over the top of the map, which is where every map search puts it
+ * and therefore where people look for it. */
+
+.area-search {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 9px 18px;
+  border: 1px solid #fdb515;
+  border-radius: 999px;
+  background: #fff;
+  color: #8a5d00;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.22);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.area-search:hover:not([disabled]) {
+  background: #fdb515;
+  color: #10192e;
+  box-shadow: 0 6px 20px rgba(253, 181, 21, 0.4);
+}
+
+.area-search[disabled] {
+  border-color: #d7dde5;
+  color: #9aa3af;
+  cursor: default;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
+.area-search[hidden] { display: none; }
+
+@media (max-width: 800px) {
+  .area-search { top: 10px; font-size: 0.8rem; padding: 8px 14px; }
+}
