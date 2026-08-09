@@ -693,6 +693,11 @@ async function runSearch({ area = false } = {}) {
     const startMs = Engine.nzEpoch(dateStr, timeStr);
 
     const view = map.getBounds();
+    if (area && !viewportUsable()) {
+      showStatus("The map has not finished sizing itself — try again in a"
+        + " moment, or resize the window.", true);
+      return;
+    }
     const bounds = area
       ? [[view.getSouth(), view.getWest()], [view.getNorth(), view.getEast()]]
       : null;
@@ -1960,20 +1965,11 @@ function routeSparkSvg(plan) {
  * makes itself so only a real pan or zoom counts.
  */
 
-const AREA_AUTO_KEY = "hikesun-area-auto";
 const AREA_MAX_KM = 220;      // refuse to search a viewport wider than this
 const AREA_MOVE_FRAC = 0.15;  // recentre by this much of the view to offer again
 
-let autoArea = loadAutoArea();
 let lastSearchBounds = null;  // Leaflet bounds used by the last search
 let programmaticMove = 0;     // >0 while the app is moving the map itself
-let areaTimer = null;
-
-function loadAutoArea() {
-  try {
-    return localStorage.getItem(AREA_AUTO_KEY) === "on";
-  } catch (err) { return false; }
-}
 
 /* Wrap a map move the APP makes, so it is not mistaken for the user panning. */
 function suppressMove(fn) {
@@ -1995,59 +1991,71 @@ function viewportKm() {
 function movedSinceSearch() {
   if (!lastSearchBounds) return true;
   const now = map.getBounds();
-  const c1 = lastSearchBounds.getCenter();
-  const c2 = now.getCenter();
   const span = map.distance(now.getSouthWest(), now.getNorthEast());
   if (!span) return true;
-  if (map.distance(c1, c2) > span * AREA_MOVE_FRAC) return true;
+  if (map.distance(lastSearchBounds.getCenter(), now.getCenter())
+      > span * AREA_MOVE_FRAC) return true;
   // a zoom change moves no centre but changes what is in view
   const prevSpan = map.distance(lastSearchBounds.getSouthWest(),
                                 lastSearchBounds.getNorthEast());
   return prevSpan > 0 && Math.abs(Math.log(span / prevSpan)) > 0.35;
 }
 
+/* Two ways in to the same action, deliberately. The toolbar button is always
+ * there so the feature is discoverable; the floating one appears over the map
+ * once you have panned, which is where people look for it. Both run the same
+ * search — there is no auto-on-move mode, because a search that fires while
+ * you are still dragging is startling and re-orders the list under your
+ * cursor. Asking is better than guessing. */
+/* Leaflet caches the container size and only recomputes it on
+ * invalidateSize() or a window resize, so a map built before its container is
+ * laid out keeps a stale 0x0 — and getBounds() then collapses to a point.
+ * An area search against that silently matches nothing, which reads as "there
+ * is nothing here" rather than "the map does not know how big it is". */
+function viewportUsable() {
+  const s = map.getSize();
+  return s.x > 50 && s.y > 50 && viewportKm() > 0.05;
+}
+
 function syncAreaUi() {
-  const btn = el("area-search");
-  const auto = el("area-auto");
-  if (auto) {
-    auto.classList.toggle("on", autoArea);
-    auto.setAttribute("aria-pressed", String(autoArea));
+  const usable = viewportUsable();
+  const tooBig = usable && viewportKm() > AREA_MAX_KM;
+  const ready = engineReady && lastSearchOpts != null && usable;
+
+  const bar = el("area-bar");
+  if (bar) {
+    bar.disabled = tooBig || !engineReady || !usable;
+    bar.title = tooBig
+      ? `Zoom in to under ${AREA_MAX_KM} km across to search the map view`
+      : "Search only what the map is currently showing, ignoring the drive"
+        + " limit. Drive times still measure from your origin.";
   }
+
+  const btn = el("area-search");
   if (!btn) return;
-  const tooBig = viewportKm() > AREA_MAX_KM;
+  btn.textContent = tooBig
+    ? "Zoom in to search this view" : "🔍 Search in this map view";
+  btn.disabled = tooBig;
   // nothing to re-search until a first search has happened, and no point
   // offering it while the map still shows what was just searched
-  const offer = engineReady && !autoArea && lastSearchOpts != null
-    && movedSinceSearch();
-  btn.textContent = tooBig ? "Zoom in to search this area" : "🔍 Search this area";
-  btn.disabled = tooBig;
-  btn.hidden = !offer;
+  btn.hidden = !(ready && movedSinceSearch());
 }
+
+// Recompute the cached size once the first layout has settled, so the very
+// first area search is not measured against a stale 0x0.
+setTimeout(() => { suppressMove(() => map.invalidateSize({ pan: false })); }, 0);
+addEventListener("load", () => {
+  suppressMove(() => map.invalidateSize({ pan: false }));
+  syncAreaUi();
+});
 
 map.on("moveend zoomend", () => {
   if (programmaticMove > 0) return;      // the app moved the map, not the user
   if (!engineReady) return;
-  if (autoArea) {
-    if (viewportKm() > AREA_MAX_KM) { syncAreaUi(); return; }
-    clearTimeout(areaTimer);
-    areaTimer = setTimeout(() => runSearch({ area: true }), 450);
-    return;
-  }
   syncAreaUi();
 });
 
-const areaBtn = el("area-search");
-if (areaBtn) {
-  areaBtn.addEventListener("click", () => runSearch({ area: true }));
-}
-
-const areaAutoBtn = el("area-auto");
-if (areaAutoBtn) {
-  areaAutoBtn.addEventListener("click", () => {
-    autoArea = !autoArea;
-    try { localStorage.setItem(AREA_AUTO_KEY, autoArea ? "on" : "off"); }
-    catch (err) { /* private mode — the preference just will not persist */ }
-    syncAreaUi();
-    if (autoArea && movedSinceSearch()) runSearch({ area: true });
-  });
+for (const id of ["area-search", "area-bar"]) {
+  const b = el(id);
+  if (b) b.addEventListener("click", () => runSearch({ area: true }));
 }
