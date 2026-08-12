@@ -414,9 +414,14 @@ if (loadCloudsEnabled()) enableClouds({ persist: false });
 /* full-screen map: hide the sidebar so the map fills the viewport. Leaflet
  * needs invalidateSize() once the container has resized. */
 const mapExpandBtn = el("map-expand");
+const mapExpandIcon = mapExpandBtn.querySelector(".me-icon");
+const mapExpandLabel = mapExpandBtn.querySelector(".me-label");
 mapExpandBtn.addEventListener("click", () => {
   const full = document.body.classList.toggle("map-full");
-  mapExpandBtn.textContent = full ? "✕" : "⛶";
+  mapExpandIcon.textContent = full ? "✕" : "⛶";
+  // only rendered on the phone layout, where the label is what makes the
+  // control findable in the first place
+  mapExpandLabel.textContent = full ? "Show list" : "Bigger map";
   mapExpandBtn.setAttribute("aria-pressed", String(full));
   mapExpandBtn.title = full ? "Exit full-screen map" : "Toggle full-screen map";
   setTimeout(() => map.invalidateSize(), 60);

@@ -27,6 +27,7 @@
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="style.css">
+  <script src="analytics.js"></script>
 </head>
 <body>
   <aside id="sidebar">
@@ -99,7 +100,13 @@
     <div id="sunhours" class="detail" hidden></div>
     <div id="detail" class="detail" hidden></div>
     <div id="results" aria-live="polite"></div>
-    <footer id="credits">Data: DOC &amp; Herenga ā Nuku (CC-BY), OpenStreetMap (ODbL), LINZ, AWS Terrain Tiles, Open-Meteo. Geocoding: OSM Nominatim. Photos: Wikimedia Commons. Not an official trail guide; check conditions before you go.</footer>
+    <footer id="credits">
+      <p class="feedback">Wrong result, or a walk that should be here?
+        <a href="https://github.com/AustinHendersonEconomist/sunward/issues/new"
+           target="_blank" rel="noopener">Tell me about it</a> — say where and when,
+        so it can be reproduced.</p>
+      <p>Data: DOC &amp; Herenga ā Nuku (CC-BY), OpenStreetMap (ODbL), LINZ, AWS Terrain Tiles, Open-Meteo. Geocoding: OSM Nominatim. Photos: Wikimedia Commons. Not an official trail guide; check conditions before you go.</p>
+    </footer>
   </aside>
 
   <main id="map-wrap">
@@ -121,6 +128,12 @@
               title="Search only what the map is currently showing, ignoring the drive limit. Drive times still measure from your origin."
               >🔍 Search this map view</button>
       <button type="button" id="origin-arm" title="Set origin by clicking the map">📍 Set origin</button>
+      <!-- lives in the toolbar so a phone can find it; still absolutely
+           positioned over the map's bottom-right on desktop -->
+      <button type="button" id="map-expand" class="map-expand"
+              title="Toggle full-screen map" aria-label="Toggle full-screen map"
+              aria-pressed="false"><span class="me-icon">⛶</span><span
+              class="me-label">Bigger map</span></button>
     </div>
     <div id="photo-strip" class="photo-strip" hidden>
       <div id="photos" class="photos"></div>
@@ -131,18 +144,20 @@
       🔍 Search in this map view</button>
     <div id="map"></div>
     <div id="toast" class="toast" role="status"></div>
+    <!-- the long halves collapse on a phone, where this sits over a map only
+         a few hundred px tall; the title keeps the full wording reachable -->
     <div class="legend">
       <span><i class="swatch sun-sw"></i> Sun</span>
       <span><i class="swatch shade-sw"></i> Shade</span>
-      <span><i class="swatch cloud-sw"></i> Cloud strip: grey-scale forecast, terrain sun below</span>
-      <span><i class="swatch shadow-sw"></i> Terrain shadow overlay</span>
+      <span title="Cloud strip on each result card: grey-scale forecast, terrain sun below"><i class="swatch cloud-sw"></i>
+        <span class="legend-long">Cloud strip: grey-scale forecast, terrain sun below</span><span class="legend-short">Cloud</span></span>
+      <span title="Terrain shadow overlay"><i class="swatch shadow-sw"></i>
+        <span class="legend-long">Terrain shadow overlay</span><span class="legend-short">Shadow</span></span>
     </div>
     <div id="cloud-caption" class="cloud-caption" hidden
          title="Live satellite infrared image (bright = cloud) — the sky right now; it does not follow the time slider"></div>
-    <div class="attribution">Terrain: AWS Open Data Terrain Tiles (Mapzen) · Clouds: NASA GIBS / Himawari</div>
-    <button type="button" id="map-expand" class="map-expand"
-            title="Toggle full-screen map" aria-label="Toggle full-screen map"
-            aria-pressed="false">⛶</button>
+    <div class="attribution">Terrain: AWS <span class="attr-long">Open Data </span>Terrain Tiles<span
+      class="attr-long"> (Mapzen)</span> · Clouds: NASA GIBS / Himawari</div>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

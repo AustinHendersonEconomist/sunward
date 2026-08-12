@@ -185,6 +185,15 @@ input:focus {
   color: #9aa3af;
 }
 
+#credits p { margin: 0; }
+#credits p + p { margin-top: 9px; }
+
+/* the only way anyone can report a wrong result, so it reads a step above the
+ * licence fine print it sits with */
+.feedback { font-size: 0.76rem; color: #6b7280; }
+.feedback a { color: #b8860b; font-weight: 600; }
+.feedback a:hover { color: #946c00; }
+
 .card {
   margin: 0 16px 12px;
   padding: 14px 16px;
@@ -356,10 +365,13 @@ input:focus {
 
 #map { flex: 1; background: #dfe6ec; }
 
+/* The map's bottom edge stacks four things that used to overlap. Keep these
+ * three `bottom` values in step, and above Leaflet's own ~17 px attribution
+ * bar at bottom: 0:  legend / cloud-caption 40, our credits 21, Leaflet 0. */
 .legend {
   position: absolute;
   left: 12px;
-  bottom: 22px;
+  bottom: 40px;
   z-index: 1000;
   display: flex;
   gap: 14px;
@@ -372,6 +384,11 @@ input:focus {
 }
 
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Two wordings for the two entries long enough to wrap the legend onto a
+ * second and third line on a phone; see the max-width: 800px block. Must be
+ * scoped under .legend to outrank `.legend span { display: inline-flex }`. */
+.legend .legend-short { display: none; }
 
 .swatch { display: inline-block; width: 16px; height: 5px; border-radius: 3px; }
 .sun-sw { background: #fdb515; }
@@ -392,7 +409,7 @@ input:focus {
 .cloud-caption {
   position: absolute;
   right: 64px;
-  bottom: 22px;
+  bottom: 40px;
   z-index: 999;
   font-size: 0.62rem;
   color: #374151;
@@ -407,8 +424,9 @@ input:focus {
 /* terrain-tile attribution line, bottom-right of the map */
 .attribution {
   position: absolute;
-  right: 10px;
-  bottom: 4px;
+  right: 64px;   /* clear of the full-screen button at right: 12px */
+  bottom: 21px;  /* above Leaflet's own attribution bar, which it used to
+                    print straight over — both lines were unreadable */
   z-index: 999;
   font-size: 0.62rem;
   color: #6b7280;
@@ -435,6 +453,7 @@ input:focus {
   display: flex; align-items: center; justify-content: center;
 }
 .map-expand:hover { border-color: #fdb515; background: #fff; }
+.map-expand .me-label { display: none; }  /* icon-only until the phone layout */
 body.map-full #sidebar { display: none; }          /* map fills the viewport */
 body.map-full .map-expand { background: #1f2937; color: #fff; border-color: #1f2937; }
 
@@ -449,17 +468,63 @@ body.map-full .map-expand { background: #1f2937; color: #fff; border-color: #1f2
 
 /* ---- small screens (phones / narrow) ------------------------------------ */
 
+/* The phone layout is a budget: 812 px split between a sidebar that scrolls
+ * internally and a map that cannot. Every px spent on chrome comes straight
+ * out of the map, which was left 184 px tall — and the legend covered 64 of
+ * those. Sidebar cap, scrubber rows and legend length are all tuned here
+ * against that budget; changing one without re-measuring the others undoes it. */
 @media (max-width: 800px) {
   body { flex-direction: column; }
-  #sidebar { width: 100%; min-width: 0; max-height: 56%; }
+  /* the sidebar scrolls, so height taken from it costs a little scrolling;
+     the map does not scroll, so height given to it is the whole difference
+     between a usable map and a letterbox. #map's floor below can shrink the
+     sidebar past this cap on short phones. */
+  #sidebar { width: 100%; min-width: 0; max-height: 48%; }
   /* whole-pane scroll (#sidebar) replaces the old form-scroll special-casing */
   #scrub-info { display: none; }
-  /* scrubber wraps; the slider gets its own full-width row for easy dragging,
-     and every control is a comfortable tap target */
-  .scrubber { flex-wrap: wrap; gap: 8px 10px; padding: 9px 12px; }
-  #scrub { flex-basis: 100%; height: 24px; }
+  /* scrubber wraps; every control stays a comfortable tap target. The slider
+     shares a row with the time readout instead of taking one of its own —
+     that cost 32 px of map and still left ~240 px of drag. */
+  .scrubber { flex-wrap: wrap; gap: 8px; padding: 9px 12px; }
+  #scrub { flex: 1 1 200px; height: 24px; min-width: 0; }
   .scrubber button { min-height: 40px; }
-  .map-expand { width: 48px; height: 48px; bottom: 16px; font-size: 1.3rem; }
+  #shadow-toggle, #cloud-toggle, #showall-toggle, #origin-arm, #area-bar,
+  .scrubber .map-expand { padding: 6px 8px; }
+  /* full-screen was a bare glyph floating over the tiles and nobody found it.
+     In the toolbar, labelled, it is the answer to a small map — and it stays
+     put in full screen, so the way back is where the way in was. */
+  .scrubber .map-expand {
+    position: static; width: auto; height: auto; font-size: 0.74rem;
+    gap: 5px; border-radius: 8px; box-shadow: none;
+  }
+  .scrubber .map-expand .me-label { display: inline; }
+  /* Explicit line packing. Left to source order the chips wrap 3 + 2 with the
+     6th landing 1 px inside the row — one font-metric change from a 4th row,
+     and a 4th row is 48 px off the map. Fixed lines: slider / 3 chips /
+     3 chips. Re-measure the widths if any label changes. */
+  .scrub-title, #scrub-label, #scrub { order: 0; }
+  #map-expand { order: 1; }
+  #shadow-toggle { order: 2; }
+  #cloud-toggle { order: 3; }
+  #showall-toggle { order: 4; }
+  #area-bar { order: 5; }
+  #origin-arm { order: 6; }
+  /* transient while the workers run; parked last so it appends a row rather
+     than splitting the chip rows */
+  #shadow-busy { order: 7; }
+  /* Bottom-left of a phone map held three overlapping things: our credit line
+     ran under Leaflet's own, and the legend wrapped to a 64 px band over both.
+     Stack them instead — legend, our credits, Leaflet's — each one line. */
+  .legend { gap: 10px; padding: 5px 9px; left: 8px; font-size: 0.7rem; }
+  .legend .legend-long { display: none; }
+  .legend .legend-short { display: inline; }
+  .attr-long { display: none; }    /* keeps the credit line off a second row */
+  /* the phone legend is wide enough to reach the caption's column, so the
+     caption goes above it rather than beside it */
+  .cloud-caption { right: 8px; bottom: 68px; }
+  /* the map keeps a usable height even on a short phone; the sidebar shrinks
+     past its cap to pay for it */
+  #map { min-height: 240px; }
   /* on a phone the map view is the point — let it breathe when expanded */
   body.map-full #map-wrap { height: 100vh; }
 }
@@ -576,10 +641,13 @@ input[type="text"] {
   font-weight: 600;
 }
 
-/* "🌗 Shadows" / "☁ Live clouds" / "🗺 Show all" toggles, chip style as #origin-arm */
+/* "🌗 Shadows" / "☁ Live clouds" / "🗺 Show all" toggles, chip style as
+ * #origin-arm. #area-bar is not a toggle but shares the chrome — without it
+ * it rendered as a raw browser button in the middle of the chip row. */
 #shadow-toggle,
 #cloud-toggle,
-#showall-toggle {
+#showall-toggle,
+#area-bar {
   flex-shrink: 0;
   padding: 6px 10px;
   border: 1px solid #d7dde5;
@@ -595,7 +663,11 @@ input[type="text"] {
 
 #shadow-toggle:hover,
 #cloud-toggle:hover,
-#showall-toggle:hover { border-color: #fdb515; }
+#showall-toggle:hover,
+#area-bar:hover:not(:disabled) { border-color: #fdb515; }
+
+/* refuses above AREA_MAX_KM across, or before the engine/viewport are ready */
+#area-bar:disabled { opacity: 0.5; cursor: not-allowed; }
 
 #shadow-toggle.on,
 #cloud-toggle.on,
