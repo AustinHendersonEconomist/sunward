@@ -119,8 +119,9 @@
   <div class="wrap">
     <div class="sunmark"></div>
     <h1>Sunward <span class="s">☀</span> — how it works</h1>
-    <p>Finding New&nbsp;Zealand hikes that will actually be <em>in the sun</em> — by
-       modelling the shadow of every hill, on every trail, at any hour.</p>
+    <p>Finding New&nbsp;Zealand walks, beaches and parks that will actually be
+       <em>in the sun</em> — by modelling the shadow of every hill, everywhere,
+       at any hour.</p>
   </div>
 </header>
 
@@ -139,9 +140,11 @@
        time. This is simple astronomy.</p>
     <p style="margin:.8rem 0 0">A spot is in sunlight exactly when <b>the sun sits higher
        than the skyline in the sun's direction.</b> So we measure the skyline <em>once</em>
-       for every 100&nbsp;m of every track and store it. After that, "is this spot sunny at
-       10&nbsp;am on 2&nbsp;July?" is a single comparison — which is why Sunward can rank
-       thousands of trails in the blink of an eye.</p>
+       for every 100&nbsp;m of every track — and every beach, park and reserve — and store
+       it. After that, "is this spot sunny at 10&nbsp;am on 2&nbsp;July?" is a single
+       comparison, which is why Sunward can rank thousands of places in the blink of an
+       eye, and why it can afford to answer questions like "which way round should I walk
+       this?" that need the same sum done hundreds of times over.</p>
   </div>
 </section>
 
@@ -190,6 +193,73 @@
   </figure>
 </section>
 
+<!-- WHAT IT DOES -->
+<section id="features">
+  <h2>What you can ask it</h2>
+  <p class="lead">All of this is the one idea above, asked in different ways. Nothing here
+     calls a server — the skyline data is already in your browser, so each answer is
+     arithmetic on numbers you have already downloaded.</p>
+  <div class="grid">
+    <div class="ds">
+      <span class="tag">Every result</span>
+      <h4>The detail panel</h4>
+      <p>Click any walk, beach or park and you get its whole day: a sun curve from morning
+         to evening, total sun-hours across your window, first and last sun, and an
+         elevation profile coloured by where the sun actually reaches. This is also the
+         only detail you get from a "show all" marker, which has no card behind it.</p>
+    </div>
+    <div class="ds">
+      <span class="tag">At the coast</span>
+      <h4>Tides</h4>
+      <p>Beaches and anything near sea level get a tide chart for the day, with high and
+         low water marked — a sunny beach at high tide can have no beach left. Modelled
+         from a global tide solution, so treat it as a guide, not a LINZ prediction.</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Right now</span>
+      <h4>☀ Sunny right now</h4>
+      <p>One button for the impulse question, pinned to this minute and ranked with cloud
+         included. Asked after dark it says so and offers tomorrow morning, rather than
+         listing twenty "sunny" walks at 9&nbsp;pm.</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Direction matters</span>
+      <h4>🧭 Best way round</h4>
+      <p>A long walk passes through sun and shade, so which end you start from changes how
+         much sun you get. Sunward walks the track at your pace in both directions, across
+         a range of start times, and reports the best. Christchurch–Little River is
+         <b>94% in sun from the south end against 68% the other way</b>. Loops are labelled
+         clockwise or anticlockwise; everything else by which end you set off from.</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Explore</span>
+      <h4>🔍 Search in this map view</h4>
+      <p>Pan the map somewhere you are curious about and search what you can see, instead
+         of what is within a drive radius. Drive times still measure from your origin, so
+         you learn what a place would cost you to reach. It searches only when you ask —
+         a search that fired while you were still dragging would re-order the list under
+         your finger.</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Any address</span>
+      <h4>☀ Sun hours at a point</h4>
+      <p>Not just the mapped places: give it any address and it reports midwinter
+         sun-hours there, first and last sun, the terrain skyline with the sun's path
+         drawn over it, and how much the surrounding hills cost you against flat ground.
+         Cathedral Square loses nothing on 21&nbsp;June; Bowenvale Valley loses
+         <b>2&nbsp;h 50&nbsp;min</b> to its ridges.</p>
+    </div>
+  </div>
+  <h3>Honest about what it knows</h3>
+  <p class="lead" style="margin-bottom:0">Terrain sun and cloud are always shown
+     separately, never blended into one number that hides which is which — a 100%-sunny
+     valley under a 90% overcast is a different thing from a shaded gully on a clear day.
+     You can rank by terrain alone, which is the right choice beyond the forecast's
+     ~16-day reach, or by the forecast-adjusted score. The satellite cloud overlay is
+     deliberately "now only" and does not follow the time slider, because nobody has a
+     satellite image of tomorrow.</p>
+</section>
+
 <!-- DATASETS -->
 <section id="data">
   <h2>The datasets it stitches together</h2>
@@ -212,10 +282,35 @@
     </div>
     <div class="ds">
       <span class="tag">Trails (fill-in)</span>
-      <h4>OpenStreetMap</h4>
-      <p>Community-mapped paths (via Overpass) that fill gaps around cities such as the
-         Christchurch Port Hills.</p>
+      <h4>OpenStreetMap paths</h4>
+      <p>Community-mapped paths that fill gaps the national network misses — most of them
+         named tracks inside nature reserves. Read from a full New&nbsp;Zealand extract of
+         the OSM database rather than a live query, which is the only way to cover the
+         whole country reliably.</p>
       <p class="lic">© OpenStreetMap contributors · ODbL</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Beaches & parks</span>
+      <h4>OpenStreetMap places</h4>
+      <p>Not everywhere worth standing in the sun is a track. Beaches, parks, gardens and
+         nature reserves come from the same extract and get the same skyline treatment, so
+         a beach is ranked by the same physics as a mountain trail.</p>
+      <p class="lic">© OpenStreetMap contributors · ODbL</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Tides</span>
+      <h4>Open-Meteo Marine</h4>
+      <p>Sea-level height through the day for coastal spots, so the tide chart can mark
+         high and low water. A global model, not an official tide table.</p>
+      <p class="lic">Open-Meteo · keyless API</p>
+    </div>
+    <div class="ds">
+      <span class="tag">Live cloud</span>
+      <h4>NASA GIBS · Himawari</h4>
+      <p>The satellite infrared image of the sky as it is right now, as an optional map
+         overlay — bright means cloud top. Useful for sanity-checking the forecast against
+         what is actually overhead.</p>
+      <p class="lic">NASA Global Imagery Browse Services</p>
     </div>
     <div class="ds">
       <span class="tag">Elevation</span>
@@ -243,7 +338,9 @@
       <span class="tag">Start address</span>
       <h4>OSM Nominatim</h4>
       <p>Turns "12 Fake St, Wellington" into a map point so "within 30&nbsp;min drive"
-         works from wherever you are.</p>
+         works from wherever you are. Looked up only when you press Enter or Find — never
+         as you type — and repeats are answered from the page's own memory, to stay inside
+         a free community service's fair-use limits.</p>
       <p class="lic">© OpenStreetMap · Nominatim</p>
     </div>
     <div class="ds">
@@ -262,7 +359,9 @@
      until it knows its own sunlight, shelter and weather.</p>
   <ol class="steps">
     <li><b>Collect & clean.</b> National tracks are pulled in, duplicate copies of the same
-        track are merged, and each line is sampled into points every ~100&nbsp;m.</li>
+        track are merged, and each line is sampled into points every ~100&nbsp;m. Beaches,
+        parks, gardens and reserves join the same table here, so everything downstream
+        treats a beach exactly like a trail.</li>
     <li><b>Enrich.</b> DOC's descriptions, difficulty grades and photos are matched onto each
         track by name + nearness, so a line becomes a described, graded, illustrated hike.</li>
     <li><b>Give it elevation & a skyline.</b> Every 100&nbsp;m point is looked up in the
@@ -271,7 +370,9 @@
         much of the walk is under bush, and whether it's native or plantation.</li>
     <li><b>Score on demand.</b> When you search, the sun's position is computed for your date
         and time, checked against every point's stored skyline, blended with the live cloud
-        forecast, and the trails are ranked.</li>
+        forecast, and the results are ranked. Everything after this — the detail panel, the
+        best way round, the moving shadow map — re-uses the same stored skylines rather
+        than fetching anything new.</li>
   </ol>
 </section>
 
@@ -289,10 +390,11 @@
   </div>
 
   <div class="calc">
-    <h4>◱ Terrain-sun score of a whole hike</h4>
+    <h4>◱ Terrain-sun score of a whole place</h4>
     <div class="eq">terrain_sun &nbsp;=&nbsp; share of (every point × every 10&nbsp;min of your window) that are in sun</div>
-    <p>Averaged over the trail and over your start-to-finish time window, so a hike that
-       falls into shadow halfway is scored honestly.</p>
+    <p>Averaged over the whole walk (or the whole beach) and over your start-to-finish time
+       window, so somewhere that falls into shadow halfway through is scored honestly
+       rather than on its best moment.</p>
   </div>
 
   <div class="calc">
@@ -300,6 +402,15 @@
     <div class="eq">effective_sun &nbsp;=&nbsp; terrain_sun × ( 1 − <span class="hl">0.75</span> × cloud_fraction )</div>
     <p>Cloud comes from the per-trail hourly forecast, weighted across your hike window. You
        can rank by terrain alone (great for planning far ahead) or by forecast-adjusted sun.</p>
+  </div>
+
+  <div class="calc">
+    <h4>🧭 Which way round?</h4>
+    <div class="eq">best &nbsp;=&nbsp; max over ( direction × start time ) of &nbsp;<span class="hl">share of your moving position that is in sun</span></div>
+    <p>Instead of scoring the whole track at once, this walks it: at each minute you are at
+       a particular point, and only that point's skyline matters. Doing that in both
+       directions across a range of start times is a few thousand lookups — nothing, once
+       the skylines are already stored.</p>
   </div>
 
   <div class="calc">
@@ -344,9 +455,9 @@
 <section id="stats">
   <h2>By the numbers</h2>
   <div class="stats">
-    <div class="stat"><b>4,857</b><span>trails, all of NZ</span></div>
+    <div class="stat"><b>7,168</b><span>walks, beaches &amp; parks</span></div>
     <div class="stat"><b>20</b><span>regions covered</span></div>
-    <div class="stat"><b>232,683</b><span>trail points modelled</span></div>
+    <div class="stat"><b>301,237</b><span>points modelled</span></div>
     <div class="stat"><b>120</b><span>sky directions / point</span></div>
     <div class="stat"><b>16 km</b><span>terrain reach per ray</span></div>
     <div class="stat"><b>96.9%</b><span>shadow-map accuracy</span></div>

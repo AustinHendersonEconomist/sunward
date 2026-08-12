@@ -13,7 +13,7 @@ const SHADE_COLOR = "#64748B";
 const SUN_RGB = [253, 181, 21];
 const SHADE_RGB = [203, 213, 225]; // light grey for 0%-sun timeline slots
 const DRIVE_KM_PER_MIN = 0.85; // crow-flies km per minute of driving
-const SCRUB_HINT = "Drag the slider to move the sun; click a trail to see its sunlight";
+const SCRUB_HINT = "Drag the slider to move the sun; click anything on the map to see its sunlight";
 
 // Search origin: user-movable, persisted; default is Cathedral Square,
 // Christchurch (same default as the API). Stored as {lon, lat, label}.
@@ -39,6 +39,30 @@ function displayName(r) {
   if (r.name) return r.name;
   const kind = r.kind || "hike";
   return kind === "hike" ? "Unnamed track" : `Unnamed ${kind}`;
+}
+
+/* What to call these things in a sentence. A result set mixes walks, beaches,
+ * parks, gardens and reserves, so "20 trails in view" was wrong whenever a
+ * beach was in the list — which is most of the time. Say the specific word
+ * when they all agree and fall back to "spots" when they do not. */
+const KIND_NOUN = {
+  hike: ["walk", "walks"],
+  beach: ["beach", "beaches"],
+  park: ["park", "parks"],
+  garden: ["garden", "gardens"],
+  reserve: ["reserve", "reserves"],
+};
+
+function kindNoun(r, plural = false) {
+  const pair = KIND_NOUN[(r && r.kind) || "hike"] || KIND_NOUN.hike;
+  return pair[plural ? 1 : 0];
+}
+
+function listNoun(list) {
+  const plural = list.length !== 1;
+  const kinds = new Set(list.map((r) => r.kind || "hike"));
+  if (kinds.size === 1) return kindNoun(list[0], plural);
+  return plural ? "spots" : "spot";
 }
 
 /* fetch with a hard timeout so a dead third-party service can't hang the UI */
@@ -572,15 +596,39 @@ map.on("click", (ev) => {
     { recenter: false });
 });
 
-/* address search (Nominatim, debounced, Enter/button only per fair use) */
+/* Address search against OSM's public Nominatim, per its usage policy
+ * (operations.osmfoundation.org/policies/nominatim/):
+ *
+ *  - Fires on Enter or the Find button ONLY, never on an `input` event. The
+ *    policy names auto-complete explicitly: "you must not implement such a
+ *    service on the client side using the API". Do not wire this to typing.
+ *  - Never more than one request per second (the policy's absolute ceiling),
+ *    which the debounce alone did not guarantee — clicking Find twice was
+ *    two requests inside 800 ms.
+ *  - Identical queries are answered from the page's own cache. The policy
+ *    warns that clients repeatedly sending the same query may be flagged as
+ *    faulty and blocked.
+ *  - The browser sends a Referer of the site's origin automatically, which is
+ *    the "valid HTTP Referer identifying the application" the policy asks for.
+ *    A User-Agent cannot be set from fetch(); Referer is the sanctioned
+ *    alternative, so do not attempt one.
+ *
+ * This runs in each visitor's own browser, one request per deliberate action,
+ * which is ordinary end-user traffic — not the "distributed scripts" the
+ * policy forbids (that clause is about bulk geocoding jobs). */
+const NOMINATIM_MIN_GAP_MS = 1100;
 const addrInput = el("addr");
 const addrResults = el("addr-results");
 let addrTimer = null;
 let geocodeSeq = 0;
+let lastGeocodeAt = 0;
+const geocodeCache = new Map();   // lowercased query -> results, per page view
 
 function requestGeocode() {
   clearTimeout(addrTimer);
-  addrTimer = setTimeout(geocode, 400);
+  // settle typing, but never land closer than the policy's 1 req/s to the last
+  const sinceLast = Date.now() - lastGeocodeAt;
+  addrTimer = setTimeout(geocode, Math.max(400, NOMINATIM_MIN_GAP_MS - sinceLast));
 }
 
 async function geocode() {
@@ -589,9 +637,16 @@ async function geocode() {
     hideAddrResults();
     return;
   }
+  const key = q.toLowerCase();
+  if (geocodeCache.has(key)) {   // answered without touching the service
+    ++geocodeSeq;
+    renderAddrResults(geocodeCache.get(key));
+    return;
+  }
   const seq = ++geocodeSeq;
   let places;
   try {
+    lastGeocodeAt = Date.now();
     const resp = await fetchTimeout(
       `${NOMINATIM_URL}?format=json&countrycodes=nz&limit=5&q=${encodeURIComponent(q)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -603,6 +658,7 @@ async function geocode() {
     return;
   }
   if (seq !== geocodeSeq) return;
+  geocodeCache.set(key, places);
   renderAddrResults(places);
 }
 
@@ -824,11 +880,11 @@ function renderResults(results) {
   if (!results.length) {
     markersLayer.clearLayers();
     lastCardById = new Map();
-    showStatus("No trails found — try a longer drive time or fewer filters.");
+    showStatus("Nothing found — try a longer drive time or fewer filters.");
     return;
   }
   const sorted = sortResults(results);
-  showStatus(`${sorted.length} trail${sorted.length > 1 ? "s" : ""} found, sunniest first.`);
+  showStatus(`${sorted.length} ${listNoun(sorted)} found, sunniest first.`);
 
   lastCardById = new Map();
   for (const r of sorted) {
@@ -868,7 +924,7 @@ function renderMarkers() {
     // say WHICH filter produced these, since the two answer different questions
     const where = (lastSearchOpts && lastSearchOpts.bounds)
       ? "in view" : "within your drive";
-    showStatus(`${lastResults.length} trail${lastResults.length > 1 ? "s" : ""}`
+    showStatus(`${lastResults.length} ${listNoun(lastResults)}`
       + ` ${where}, sunniest first.`);
   }
 }
@@ -942,7 +998,7 @@ function buildCard(r) {
 
   const componentsLine = r.sun.no_forecast
     ? `<small>sun · no forecast</small>`
-    : `<small title="sun score = terrain sun × (1 − 0.75 × cloud), duration-weighted over your hike window">` +
+    : `<small title="sun score = terrain sun × (1 − 0.75 × cloud), duration-weighted over your visit">` +
       `☀ ${Math.round(r.sun.terrain_frac * 100)}% terrain · ` +
       `☁ ${Math.round(r.sun.cloud_cover * 100)}% cloud</small>`;
 
@@ -959,7 +1015,7 @@ function buildCard(r) {
       <div class="meta">${meta.join("")}</div>
       ${cloudStrip}
       <div class="timeline">${slots}</div>
-      <div class="tl-caption"><span>${tlStart}</span><span>sun along your hike</span><span>${tlEnd}</span></div>
+      <div class="tl-caption"><span>${tlStart}</span><span>sun during your visit</span><span>${tlEnd}</span></div>
     </div>
   `;
   const img = card.querySelector(".card-photo");
@@ -1081,7 +1137,7 @@ function loadTrailDetail(fitMap, fullRender = false) {
     if (fullRender) renderDetail(detail);
     else updateDetailNow(detail);
   } catch (err) {
-    showStatus(`Could not load trail: ${err.message}`, true);
+    showStatus(`Could not load this ${kindNoun(selected)}: ${err.message}`, true);
   }
 }
 
@@ -1113,7 +1169,8 @@ function drawTrail(detail, fitMap) {
   const cloudPct = cloudAtScrub();
   const cloudPart = cloudPct == null ? "" : ` · ${cloudPct}% cloud`;
   scrubInfo.textContent =
-    `${displayName(detail)} — ${pct}% of the trail in sun at ${minutesToHHMM(+scrub.value)}${cloudPart}`;
+    `${displayName(detail)} — ${pct}% of the ${kindNoun(detail)} in sun `
+    + `at ${minutesToHHMM(+scrub.value)}${cloudPart}`;
 }
 
 /* ---- address sun-hours lookup --------------------------------------------
@@ -1697,8 +1754,8 @@ function closeDetail() {
   trailLayer.clearLayers();
   for (const c of resultsBox.querySelectorAll(".card")) c.classList.remove("selected");
   scrubInfo.textContent = shadowsEnabled
-    ? `Terrain shadows at ${minutesToHHMM(+scrub.value)} — click a trail to see its sunlight`
-    : `${minutesToHHMM(+scrub.value)} — turn on 🌗 Shadows, or click a trail`;
+    ? `Terrain shadows at ${minutesToHHMM(+scrub.value)} — click anything on the map to see its sunlight`
+    : `${minutesToHHMM(+scrub.value)} — turn on 🌗 Shadows, or click anything on the map`;
 }
 
 /* cloud fraction (0-100) at the scrubber's current time for the selected
@@ -1728,8 +1785,8 @@ scrub.addEventListener("input", () => {
   } else {
     // no trail chosen yet: reflect the time and keep nudging toward the map
     scrubInfo.textContent = shadowsEnabled
-      ? `Terrain shadows at ${minutesToHHMM(+scrub.value)} — click a trail to see its sunlight`
-      : `${minutesToHHMM(+scrub.value)} — turn on 🌗 Shadows, or click a trail`;
+      ? `Terrain shadows at ${minutesToHHMM(+scrub.value)} — click anything on the map to see its sunlight`
+      : `${minutesToHHMM(+scrub.value)} — turn on 🌗 Shadows, or click anything on the map`;
   }
 });
 
@@ -1783,13 +1840,13 @@ form.addEventListener("submit", (ev) => {
     "deg az (expect ~14.7362 / ~36.1774)");
 
   el("search-btn").disabled = true;
-  showStatus("loading trail index…");
+  showStatus("loading walks, beaches and parks…");
   try {
     await Engine.loadIndex(".");
     engineReady = true;
     console.log("Sunward static: trail index loaded");
   } catch (err) {
-    showStatus(`Could not load trail data: ${err.message}`, true);
+    showStatus(`Could not load the map data: ${err.message}`, true);
     return;
   } finally {
     el("search-btn").disabled = false;

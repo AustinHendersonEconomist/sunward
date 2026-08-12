@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sunward ☀ — sunny hikes in New Zealand</title>
+  <title>Sunward ☀ — sunny walks in New Zealand</title>
   <meta name="description" content="Find New Zealand walks, beaches and parks that will actually be in the sun — terrain shadows, forest cover and the forecast, together.">
   <link rel="icon" href="favicon.ico" sizes="any">
   <link rel="icon" type="image/png" href="favicon.png">
@@ -33,7 +33,7 @@
   <aside id="sidebar">
     <header>
       <h1>Sunward <span class="sun">☀</span></h1>
-      <p class="tagline">Find hikes that will be in the sun — terrain shadows, forest cover and forecast, together.</p>
+      <p class="tagline">Find walks, beaches and parks that will be in the sun — terrain shadows, forest cover and forecast, together.</p>
       <a class="how-link" href="how-it-works.html" target="_blank" rel="noopener">ⓘ How Sunward works</a>
     </header>
 
@@ -90,7 +90,7 @@
         <button type="button" id="rank-terrain" class="rank-btn" aria-pressed="false">☀ terrain</button>
       </div>
       <p id="rank-lock-note" class="rank-lock-note" hidden>Forecast unavailable for this date — ranking by terrain sun.</p>
-      <button type="submit" id="search-btn">Search sunny hikes</button>
+      <button type="submit" id="search-btn">Search sunny spots</button>
       <button type="button" id="now-btn" class="now-btn"
               title="Rank everything in range by whether the sun is on it this minute">☀ Sunny right now</button>
       <p id="now-note" class="now-note" hidden></p>
@@ -115,7 +115,7 @@
       <output id="scrub-label">10:00</output>
       <input type="range" id="scrub" min="480" max="1020" step="15" value="600"
              aria-label="Time of day scrubber">
-      <span id="scrub-info">Drag the slider to move the sun; click a trail to see its sunlight</span>
+      <span id="scrub-info">Drag the slider to move the sun; click anything on the map to see its sunlight</span>
       <button type="button" id="shadow-toggle" title="Toggle terrain shadow overlay" aria-pressed="false">🌗 Shadows</button>
       <span id="shadow-busy" class="shadow-busy" hidden>computing shadows…</span>
       <button type="button" id="cloud-toggle"
