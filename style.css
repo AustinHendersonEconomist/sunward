@@ -363,6 +363,15 @@ input:focus {
   text-overflow: ellipsis;
 }
 
+/* The toolbar's fixed chips leave this ~190 px at 1280 px wide, and as a
+ * shrinkable flex item it collapsed to the single character "D." — the
+ * remains of "Drag the slider...". Below the width where it can say
+ * something, say nothing: the same live "42% in sun at 10:00" readout is in
+ * the detail panel, so nothing is actually lost. */
+@media (max-width: 1499px) {
+  #scrub-info { display: none; }
+}
+
 #map { flex: 1; background: #dfe6ec; }
 
 /* The map's bottom edge stacks four things that used to overlap. Keep these
@@ -479,9 +488,20 @@ body.map-full .map-expand { background: #1f2937; color: #fff; border-color: #1f2
      the map does not scroll, so height given to it is the whole difference
      between a usable map and a letterbox. #map's floor below can shrink the
      sidebar past this cap on short phones. */
-  #sidebar { width: 100%; min-width: 0; max-height: 48%; }
-  /* whole-pane scroll (#sidebar) replaces the old form-scroll special-casing */
-  #scrub-info { display: none; }
+  /* The cap cuts wherever it lands — it was slicing the EXPERT chip in half,
+     which reads as a rendering fault rather than "there is more below".
+     Fading the last few px turns the cut into an affordance. The mask fades
+     to the near-white body background, so it reads as a soft edge, and it
+     costs no layout height (unlike a real scroll hint). */
+  #sidebar {
+    width: 100%;
+    min-width: 0;
+    max-height: 48%;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  }
+  /* whole-pane scroll (#sidebar) replaces the old form-scroll special-casing.
+     #scrub-info is already hidden below 1500 px, up near its own rule. */
   /* scrubber wraps; every control stays a comfortable tap target. The slider
      shares a row with the time readout instead of taking one of its own —
      that cost 32 px of map and still left ~240 px of drag. */
