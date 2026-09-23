@@ -164,6 +164,27 @@ const Engine = (() => {
   /* Place kind of a trail: 'place:' categories (beaches, gardens, parks,
    * reserves ingested with source='place') expose their kind after the
    * prefix; everything else is a plain hike. Mirrors the Python mapping. */
+  /* Rank among equally sunny options: curated walks, then places, then OSM
+   * paths, then OSM vehicle tracks. Ties are the norm — at 10:00 on a spring
+   * day 683 of 691 options near Christchurch are 100% in sun — and breaking
+   * them by id (roughly alphabetical) listed "103rd Avenue"-style forestry
+   * roads. Exact contract shared with hikesun/score.py tie_tier. */
+  const TIE_TIER_BY_SOURCE = { hnk: 0, doc: 0, place: 1 };
+  function tieTier(source, category) {
+    const tier = TIE_TIER_BY_SOURCE[source];
+    if (tier !== undefined) return tier;
+    return (category === "osm:footway" || category === "osm:path") ? 2 : 3;
+  }
+
+  /* sunnier first, then tieTier, then nearer, then id (parity with
+   * score.py _rank_key). Each side: { frac, source, category, distKm, id }. */
+  function rankCompare(a, b) {
+    return (b.frac - a.frac)
+      || (tieTier(a.source, a.category) - tieTier(b.source, b.category))
+      || (a.distKm - b.distKm)
+      || (a.id - b.id);
+  }
+
   function trailKind(trail) {
     const cat = trail.category;
     return (typeof cat === "string" && cat.startsWith("place:"))
@@ -397,19 +418,16 @@ const Engine = (() => {
       });
     }
 
-    // Final ordering: ties break by ascending id (parity with score.py).
-    if (rankBy === "terrain") {
-      results.sort((a, b) =>
-        (b.sun.terrain_frac - a.sun.terrain_frac) || (a.id - b.id));
-    } else {
-      results.sort((a, b) =>
-        (b.sun.effective - a.sun.effective) || (a.id - b.id));
-    }
+    // Final ordering: ties break by rankCompare (parity with score.py).
+    const field = rankBy === "terrain" ? "terrain_frac" : "effective";
+    const key = (r) => ({ frac: r.sun[field], source: r.source,
+      category: r.category, distKm: r.drive_km, id: r.id });
+    results.sort((a, b) => rankCompare(key(a), key(b)));
     return results;
   }
 
   /* Every in-range, filter-passing trail, terrain-scored and sorted by
-   * terrain sun (ties by ascending id). Shared by search() and
+   * terrain sun (ties by rankCompare). Shared by search() and
    * candidatesInRange(). opts.kinds: array/Set of kinds, or null = all. */
   /* `bounds` is [[south, west], [north, east]] — when given it REPLACES the
    * drive-radius filter, so "what is in view" decides which walks are
@@ -447,9 +465,10 @@ const Engine = (() => {
       const terrainScore = scoreTrail(trail, startMs, null);
       candidates.push({ trail, distKm, terrainScore });
     }
-    candidates.sort((a, b) =>
-      (b.terrainScore.terrain_frac - a.terrainScore.terrain_frac)
-      || (a.trail.id - b.trail.id));
+    const key = (c) => ({ frac: c.terrainScore.terrain_frac,
+      source: c.trail.source, category: c.trail.category,
+      distKm: c.distKm, id: c.trail.id });
+    candidates.sort((a, b) => rankCompare(key(a), key(b)));
     return candidates;
   }
 
@@ -817,6 +836,7 @@ const Engine = (() => {
     sunPosition, nzEpoch, isoNZ, nzDateStr, loadIndex, ensureCells, inSun,
     scoreTrail, search, candidatesInRange, trailDetail, getCloudCover,
     getCloudSeries, getCloudSeriesBatch, routePlan, haversineKm,
+    rankCompare,
   };
 })();
 

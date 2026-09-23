@@ -39,7 +39,89 @@ h1 .sun { color: #fdb515; }
 #search-form { padding: 0 22px 14px; border-bottom: 1px solid #eef1f5; }
 
 .field-row { display: flex; gap: 10px; }
-.field-row label { flex: 1; }
+.field-row label { flex: 1; min-width: 0; }
+.when-row .f-date { flex: 1.35; }
+.when-row .f-time { flex: 1.25; }
+.when-row .f-drive { flex: 0.65; }
+.when-row input { padding-left: 8px; padding-right: 8px; }
+/* "min" sits inside the drive box, so the label can stay one short word */
+.unit-wrap { position: relative; display: block; }
+.unit-wrap input { padding-right: 30px; -moz-appearance: textfield; }
+.unit-wrap input::-webkit-inner-spin-button,
+.unit-wrap input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.unit {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(calc(-50% + 2.5px)); /* input carries margin-top: 5px */
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #9aa3af;
+  text-transform: none;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+/* walk length, difficulty, kinds and rank-by fold away, so the results start
+ * above the fold; the count keeps a hidden filter from silently narrowing
+ * the list */
+.more-filters { margin-top: 10px; }
+.more-filters > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #4b5563;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.more-filters > summary::-webkit-details-marker { display: none; }
+.more-filters > summary::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-right: 2px solid #9aa3af;
+  border-bottom: 2px solid #9aa3af;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+  margin-right: 2px;
+}
+.more-filters[open] > summary::before { transform: rotate(45deg); }
+.more-filters > summary:hover { color: #1f2937; }
+.more-filters[open] { padding-bottom: 4px; }
+.filter-count {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fdb515;
+  color: #462e00;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.filter-count[hidden] { display: none; }
+
+.origin-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+/* a text-weight action that sits in a line of text */
+.link-btn {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #b8860b;
+  cursor: pointer;
+}
+.link-btn:hover { color: #946c00; text-decoration: underline; }
 
 #search-form label,
 .diff-label {
@@ -142,9 +224,10 @@ input:focus {
 
 .rank-lock-note[hidden] { display: none; }
 
+.search-row { display: flex; gap: 8px; margin-top: 12px; }
+
 #search-btn {
-  width: 100%;
-  margin-top: 12px;
+  flex: 1.6;
   padding: 10px;
   border: 0;
   border-radius: 10px;
@@ -259,8 +342,9 @@ input:focus {
   font-size: 0.7rem;
   background: #f1f4f8;
   color: #4b5563;
-  text-transform: capitalize;
 }
+
+.chip.easiest, .chip.easy, .chip.moderate, .chip.hard, .chip.expert { text-transform: capitalize; }
 
 .chip.kind { background: #e0f2fe; color: #0369a1; text-transform: lowercase; }
 .chip.easiest { background: #e3f5ea; color: #17703f; }
@@ -320,8 +404,9 @@ input:focus {
 
 .scrubber {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 10px 18px;
   background: #fff;
   border-bottom: 1px solid #e5e9ef;
@@ -347,7 +432,8 @@ input:focus {
 }
 
 #scrub {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 120px;
   accent-color: #fdb515;
   cursor: pointer;
 }
@@ -529,9 +615,7 @@ body.map-full .map-expand { background: #1f2937; color: #fff; border-color: #1f2
   #showall-toggle { order: 4; }
   #area-bar { order: 5; }
   #origin-arm { order: 6; }
-  /* transient while the workers run; parked last so it appends a row rather
-     than splitting the chip rows */
-  #shadow-busy { order: 7; }
+  .shadow-busy { left: 8px; bottom: 70px; }
   /* Bottom-left of a phone map held three overlapping things: our credit line
      ran under Leaflet's own, and the legend wrapped to a 64 px band over both.
      Stack them instead — legend, our credits, Leaflet's — each one line. */
@@ -626,7 +710,7 @@ input[type="text"] {
 }
 
 #origin-label {
-  margin-top: 7px;
+  min-width: 0;
   font-size: 0.72rem;
   color: #6b7280;
   white-space: nowrap;
@@ -698,15 +782,20 @@ input[type="text"] {
   font-weight: 600;
 }
 
-/* small "computing shadows…" chip shown while workers are busy */
+/* small "computing shadows…" pill over the map while workers are busy; sits
+ * above the legend (legend bottom 40 + ~34 tall) */
 .shadow-busy {
-  flex-shrink: 0;
-  padding: 4px 9px;
+  position: absolute;
+  left: 12px;
+  bottom: 82px;
+  z-index: 1001;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: #eef1f5;
-  color: #6b7280;
-  font-size: 0.68rem;
+  background: rgba(31, 41, 55, 0.85);
+  color: #fff;
+  font-size: 0.7rem;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .shadow-busy[hidden] { display: none; }
@@ -769,11 +858,11 @@ input[type="text"] {
 
 .photo-strip .photo { flex-shrink: 0; display: block; }
 
+/* fixed box: with width:auto a still-loading lazy image was a 2 px sliver */
 .photo-strip img {
   display: block;
   height: 64px;
-  width: auto;
-  max-width: 140px;
+  width: 96px;
   object-fit: cover;
   border-radius: 8px;
   border: 1px solid #e7ebf0;
@@ -873,7 +962,7 @@ input[type="text"] {
   letter-spacing: 0.05em;
 }
 
-.detail-facts dd { margin: 2px 0 0; font-size: 0.84rem; color: #1f2937; text-transform: capitalize; }
+.detail-facts dd { margin: 2px 0 0; font-size: 0.84rem; color: #1f2937; }
 
 .detail-desc {
   margin: 13px 0 0;
@@ -900,6 +989,10 @@ input[type="text"] {
 .tide-note { margin-top: 6px; font-size: 0.7rem; line-height: 1.45; }
 
 @media (max-width: 800px) {
+  /* every px of strip comes off a map that is already short */
+  .photo-strip { padding: 6px 12px; gap: 6px; }
+  .photo-strip img { height: 46px; width: 68px; border-radius: 6px; }
+  .photo-credit { font-size: 0.6rem; }
   .detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detail-headline { gap: 16px; }
 }
@@ -909,20 +1002,20 @@ input[type="text"] {
 .sunhours-times { margin-top: 7px; font-size: 0.82rem; color: #4b5563; }
 .sunhours-times b { color: #1f2937; }
 .sunhours-note { margin-top: 12px; font-size: 0.7rem; line-height: 1.45; }
-#sunhours-btn { padding: 0 10px; }
+
 
 /* "sunny right now": the impulse question, not the planning one */
 .now-btn {
-  width: 100%;
-  margin-top: 8px;
-  padding: 11px;
+  flex: 1;
+  padding: 10px;
   border: 1px solid #fdb515;
   border-radius: 9px;
   background: #fffaf0;
   color: #8a5d00;
   font: inherit;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s, box-shadow 0.15s;
 }

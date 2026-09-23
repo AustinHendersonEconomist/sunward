@@ -44,29 +44,36 @@
                autocomplete="off" aria-label="Start from address">
         <button type="button" id="addr-go" title="Find address">Find</button>
         <button type="button" id="locate-btn" title="Use my location" aria-label="Use my location">🧭</button>
-        <button type="button" id="sunhours-btn"
-                title="Winter sun hours at this address (terrain shading)"
-                aria-label="Winter sun hours at this address">☀</button>
         <div id="addr-results" class="addr-results" hidden></div>
       </div>
-      <div id="origin-label">📍 Origin: Christchurch (default)</div>
-      <div class="field-row">
-        <label>Date
+      <div class="origin-row">
+        <span id="origin-label">📍 Origin: Christchurch (default)</span>
+        <button type="button" id="sunhours-btn" class="link-btn"
+                title="Midwinter sun hours at your origin, after terrain shading">☀ Winter sun here</button>
+      </div>
+      <!-- the three answers every search needs, on one row; the rest folds
+           away so the results start above the fold -->
+      <div class="field-row when-row">
+        <label class="f-date">Date
           <input type="date" id="date" required>
         </label>
-        <label>Start time
+        <label class="f-time">Start
           <input type="time" id="time" value="10:00" step="900" required>
         </label>
+        <label class="f-drive" title="Longest drive you would make, in minutes">Drive
+          <span class="unit-wrap"><input type="number" id="drive-min" value="30"
+            min="5" max="240" step="5" aria-label="Maximum drive in minutes"><span
+            class="unit" aria-hidden="true">min</span></span>
+        </label>
       </div>
+      <details id="more-filters" class="more-filters">
+        <summary>More filters <span id="filter-count" class="filter-count" hidden></span></summary>
       <div class="field-row">
         <label>Min walk (min)
           <input type="number" id="min-minutes" min="0" step="15" placeholder="any">
         </label>
         <label>Max walk (min)
           <input type="number" id="max-minutes" min="0" step="15" placeholder="any">
-        </label>
-        <label>Max drive (min)
-          <input type="number" id="drive-min" value="30" min="5" max="240" step="5">
         </label>
       </div>
       <div class="diff-label">Difficulty</div>
@@ -90,9 +97,12 @@
         <button type="button" id="rank-terrain" class="rank-btn" aria-pressed="false">☀ terrain</button>
       </div>
       <p id="rank-lock-note" class="rank-lock-note" hidden>Forecast unavailable for this date — ranking by terrain sun.</p>
-      <button type="submit" id="search-btn">Search sunny spots</button>
-      <button type="button" id="now-btn" class="now-btn"
-              title="Rank everything in range by whether the sun is on it this minute">☀ Sunny right now</button>
+      </details>
+      <div class="search-row">
+        <button type="submit" id="search-btn">Search sunny spots</button>
+        <button type="button" id="now-btn" class="now-btn"
+                title="Rank everything in range by whether the sun is on it this minute">☀ Sunny now</button>
+      </div>
       <p id="now-note" class="now-note" hidden></p>
     </form>
 
@@ -117,7 +127,6 @@
              aria-label="Time of day scrubber">
       <span id="scrub-info">Drag the slider to move the sun; click anything on the map to see its sunlight</span>
       <button type="button" id="shadow-toggle" title="Toggle terrain shadow overlay" aria-pressed="false">🌗 Shadows</button>
-      <span id="shadow-busy" class="shadow-busy" hidden>computing shadows…</span>
       <button type="button" id="cloud-toggle"
               title="Live satellite cloud overlay (infrared: bright/white = cloud tops). Shows the sky RIGHT NOW — unlike the shadows, it does not follow the time slider."
               aria-pressed="false">☁ Live clouds</button>
@@ -143,14 +152,17 @@
     <button type="button" id="area-search" class="area-search" hidden>
       🔍 Search in this map view</button>
     <div id="map"></div>
+    <!-- over the map, not in the toolbar: as a toolbar chip it pushed
+         "Set origin" off the edge on desktop and added a row on a phone -->
+    <span id="shadow-busy" class="shadow-busy" hidden>computing shadows…</span>
     <div id="toast" class="toast" role="status"></div>
     <!-- the long halves collapse on a phone, where this sits over a map only
          a few hundred px tall; the title keeps the full wording reachable -->
     <div class="legend">
       <span><i class="swatch sun-sw"></i> Sun</span>
       <span><i class="swatch shade-sw"></i> Shade</span>
-      <span title="Cloud strip on each result card: grey-scale forecast, terrain sun below"><i class="swatch cloud-sw"></i>
-        <span class="legend-long">Cloud strip: grey-scale forecast, terrain sun below</span><span class="legend-short">Cloud</span></span>
+      <span title="The thin grey strip on each result card is the cloud forecast; the sun bar below it is terrain only"><i class="swatch cloud-sw"></i>
+        <span class="legend-long">Cloud forecast</span><span class="legend-short">Cloud</span></span>
       <span title="Terrain shadow overlay"><i class="swatch shadow-sw"></i>
         <span class="legend-long">Terrain shadow overlay</span><span class="legend-short">Shadow</span></span>
     </div>

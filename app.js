@@ -740,8 +740,10 @@ function selectedKinds() {
 }
 
 /* `area: true` searches the map's current bounds instead of the drive radius.
- * The origin is left where it is, so drive times still read from home. */
-async function runSearch({ area = false } = {}) {
+ * The origin is left where it is, so drive times still read from home.
+ * `reveal: false` skips scrolling the results into view (the boot search,
+ * where a first-time visitor should land on the address box). */
+async function runSearch({ area = false, reveal = true } = {}) {
   if (!engineReady) return; // index not loaded (message already shown)
   const btn = el("search-btn");
   const seq = ++searchSeq;
@@ -794,6 +796,7 @@ async function runSearch({ area = false } = {}) {
     lastResults = results;
     lastSearchBounds = view;   // any search anchors 'moved since'
     renderResults(results);
+    if (reveal) revealResults();
     if (typeof syncAreaUi === "function") syncAreaUi();
   } catch (err) {
     if (seq !== searchSeq) return;
@@ -804,6 +807,22 @@ async function runSearch({ area = false } = {}) {
   }
 }
 
+/* On a phone the sidebar is under half the screen and the form fills it, so a
+ * search would otherwise answer out of sight. Only scrolls when the first
+ * result is actually hidden, so a desktop sidebar stays where it is. */
+function revealResults() {
+  const sidebar = el("sidebar");
+  const first = resultsBox.firstElementChild;
+  const status = el("status");
+  if (!first || status.hidden) return;
+  const sb = sidebar.getBoundingClientRect();
+  if (first.getBoundingClientRect().top < sb.bottom - 60) return;
+  sidebar.scrollTo({
+    top: sidebar.scrollTop + status.getBoundingClientRect().top - sb.top - 8,
+    behavior: "smooth",
+  });
+}
+
 /* headline metric for a result under the current rank mode: "forecast" shows
  * sun.effective (terrain x cloud), "terrain" shows sun.terrain_frac. When a
  * trail has no forecast, effective === terrain_frac already, so this never
@@ -812,14 +831,12 @@ function headlineFrac(r) {
   return rankMode === "terrain" ? r.sun.terrain_frac : r.sun.effective;
 }
 
+/* same tie-breaks as the engine's own ordering, so flipping the rank toggle
+ * never shuffles equally sunny results into arrival order */
 function sortResults(results) {
-  const sorted = results.slice();
-  if (rankMode === "terrain") {
-    sorted.sort((a, b) => b.sun.terrain_frac - a.sun.terrain_frac);
-  } else {
-    sorted.sort((a, b) => b.sun.effective - a.sun.effective);
-  }
-  return sorted;
+  const key = (r) => ({ frac: headlineFrac(r), source: r.source,
+    category: r.category, distKm: r.drive_km, id: r.id });
+  return results.slice().sort((a, b) => Engine.rankCompare(key(a), key(b)));
 }
 
 /* Lock the rank toggle to terrain (with an explanatory note) when NONE of
@@ -847,6 +864,7 @@ function syncRankToggleUI() {
   forecastBtn.classList.toggle("active", rankMode === "forecast");
   terrainBtn.setAttribute("aria-pressed", String(rankMode === "terrain"));
   forecastBtn.setAttribute("aria-pressed", String(rankMode === "forecast"));
+  syncFilterCount();
 }
 
 function setRankMode(mode) {
@@ -1656,6 +1674,23 @@ async function renderTide(detail, container) {
     </div>`);
 }
 
+function capitalize(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/* trails.category is a storage key ("osm:track", "hnk:Christchurch City
+ * Council", "place:beach"), and printed raw it read "Osm:Track". Say what it
+ * means, or nothing where the title already says it. */
+const OSM_CATEGORY = { track: "Vehicle track", path: "Path", footway: "Footpath",
+  bridleway: "Bridleway" };
+function categoryLabel(detail) {
+  const cat = String(detail.category || "");
+  if (!cat || cat.startsWith("place:")) return "";
+  if (cat.startsWith("osm:")) return OSM_CATEGORY[cat.slice(4)] || "";
+  if (cat.startsWith("hnk:")) return `Managed by ${cat.slice(4)}`;
+  return cat;
+}
+
 /* full panel render — called on selection, not on every scrubber tick */
 function renderDetail(detail) {
   const stats = sunDayStats(detail.timeline);
@@ -1669,7 +1704,7 @@ function renderDetail(detail) {
       ? `${(detail.length_m / 1000).toFixed(1)} km` : `${Math.round(detail.length_m)} m`]);
   }
   if (detail.est_minutes != null) facts.push(["Walk time", fmtMinutes(detail.est_minutes)]);
-  if (detail.difficulty) facts.push(["Difficulty", detail.difficulty]);
+  if (detail.difficulty) facts.push(["Difficulty", capitalize(detail.difficulty)]);
   if (r.drive_min_est != null) {
     facts.push(["Drive", `~${Math.round(r.drive_min_est)} min (${r.drive_km.toFixed(0)} km)`]);
   }
@@ -1691,7 +1726,7 @@ function renderDetail(detail) {
         <h2>${kind === "hike" ? "" : (KIND_EMOJI[kind] || "📍") + " "}${escapeHtml(displayName(detail))}</h2>
         <div class="meta">${sourceBadge(detail.source)}
           ${canopy || ""}
-          ${detail.category ? `<span class="chip">${escapeHtml(detail.category)}</span>` : ""}
+          ${categoryLabel(detail) ? `<span class="chip">${escapeHtml(categoryLabel(detail))}</span>` : ""}
         </div>
       </div>
       <button type="button" class="detail-close" id="detail-close"
@@ -1814,6 +1849,21 @@ if (rankTerrainBtn && rankForecastBtn) {
   });
 }
 
+/* ---- more filters -------------------------------------------------------- */
+
+function syncFilterCount() {
+  const n = (el("min-minutes").value ? 1 : 0)
+    + (el("max-minutes").value ? 1 : 0)
+    + (document.querySelector("#difficulty input:checked") ? 1 : 0)
+    + (selectedKinds() ? 1 : 0)
+    + (rankMode === "terrain" && !rankLocked ? 1 : 0); // a lock is not a choice
+  const badge = el("filter-count");
+  badge.textContent = `${n} on`;
+  badge.hidden = n === 0;
+}
+el("more-filters").addEventListener("input", syncFilterCount);
+el("more-filters").addEventListener("click", () => setTimeout(syncFilterCount, 0));
+
 /* ---- boot ---------------------------------------------------------------- */
 
 form.addEventListener("submit", (ev) => {
@@ -1827,6 +1877,7 @@ form.addEventListener("submit", (ev) => {
   dateInput.value = Engine.nzDateStr();
   el("origin-label").textContent = `📍 Origin: ${origin.label}`;
   syncRankToggleUI();
+  syncFilterCount();
   syncShadowToggleUI();
   applyShadowEnabled();
 
@@ -1851,7 +1902,7 @@ form.addEventListener("submit", (ev) => {
   } finally {
     el("search-btn").disabled = false;
   }
-  runSearch();
+  runSearch({ reveal: false });
 })();
 
 /* ---- sunny right now -----------------------------------------------------
