@@ -24,6 +24,10 @@
 const Engine = (() => {
   const SUN_MIN_ELEV_DEG = 0.25;   // sun must clear this to count as up at all
   const CLOUD_ATTENUATION = 0.75; // effective = terrain * (1 - 0.75 * cloud)
+  // the top this-many by terrain are forecast before the final top `limit`
+  // is chosen, so a clearer spot can displace a cloudier one (parity with
+  // config.FORECAST_POOL)
+  const FORECAST_POOL = 60;
   const SAMPLE_MIN = 10;           // timeline sampling step (minutes)
   const DRIVE_KM_PER_MIN = 0.85;   // crow-flies km per minute of driving
   const R_EARTH_KM = 6371.0;
@@ -326,7 +330,8 @@ const Engine = (() => {
    * score.search.
    *
    * Two-pass scoring: every candidate within radius/filters is scored on
-   * TERRAIN ALONE first; the top `limit` by terrain_frac are kept, and (when
+   * TERRAIN ALONE first; the top FORECAST_POOL by terrain_frac are kept
+   * (`limit` without weather), and (when
    * useWeather) a SINGLE batched Open-Meteo call (getCloudSeriesBatch)
    * fetches per-trail hourly cloud series for those candidates' start
    * coordinates. Each kept trail is then rescored with its own
@@ -355,7 +360,7 @@ const Engine = (() => {
     // exactly the trails we return.
     const candidates = gatherCandidates({ lat, lon, driveMin, startMs,
       minMinutes, maxMinutes, difficulties, kinds, bounds });
-    const kept = candidates.slice(0, limit);
+    const kept = candidates.slice(0, useWeather ? Math.max(limit, FORECAST_POOL) : limit);
 
     const cloudDate = nzDateStr(startMs);
     let batchSeries = null;
@@ -423,7 +428,7 @@ const Engine = (() => {
     const key = (r) => ({ frac: r.sun[field], source: r.source,
       category: r.category, distKm: r.drive_km, id: r.id });
     results.sort((a, b) => rankCompare(key(a), key(b)));
-    return results;
+    return results.slice(0, limit);
   }
 
   /* Every in-range, filter-passing trail, terrain-scored and sorted by
@@ -470,6 +475,33 @@ const Engine = (() => {
       distKm: c.distKm, id: c.trail.id });
     candidates.sort((a, b) => rankCompare(key(a), key(b)));
     return candidates;
+  }
+
+  /* Nearest NAMED place (park, reserve, beach, garden) to (lon, lat) within
+   * maxKm, from the cells already loaded — a landmark to tell apart the
+   * sections of one long walkway ("Crater Rim Walkway" is 11 of them) and to
+   * give the 500-odd unnamed beaches and parks a usable name. Returns the
+   * name or null. `excludeName` skips a landmark that would just repeat the
+   * result's own name. */
+  function nearbyLandmark(lon, lat, { maxKm = 3, excludeId = null,
+                                      excludeName = null } = {}) {
+    const d = requireData();
+    const kx = Math.cos(lat * DEG) * 111.32;   // km per degree, locally flat
+    const skip = excludeName ? excludeName.trim().toLowerCase() : null;
+    let best = null;
+    let bestKm2 = maxKm * maxKm;
+    for (const t of d.trails) {
+      if (!t.name || !t.start || t.id === excludeId) continue;
+      if (typeof t.category !== "string" || !t.category.startsWith("place:")) continue;
+      const dx = (t.start[0] - lon) * kx;
+      const dy = (t.start[1] - lat) * 110.57;
+      const km2 = dx * dx + dy * dy;
+      if (km2 >= bestKm2) continue;
+      if (skip && t.name.trim().toLowerCase() === skip) continue;
+      best = t.name;
+      bestKm2 = km2;
+    }
+    return best;
   }
 
   /* Every in-range option — no weather, no limit — terrain-scored, for the
@@ -808,10 +840,19 @@ const Engine = (() => {
     const cachedAll = coords.map(([lat, lon]) => readCache(seriesCacheKey(lat, lon, dateStr)));
     if (cachedAll.every((v) => v !== undefined)) return cachedAll;
 
+    // trails in the same 0.1-degree cache cell share one forecast, so ask
+    // Open-Meteo once per cell; a 60-trail pool is usually a dozen cells
+    const cellOf = coords.map(([lat, lon]) => seriesCacheKey(lat, lon, dateStr));
+    const unique = [];
+    const slot = new Map();
+    coords.forEach((c, i) => {
+      if (!slot.has(cellOf[i])) { slot.set(cellOf[i], unique.length); unique.push(c); }
+    });
+
     let seriesList;
     try {
-      const lats = coords.map(([lat]) => lat.toFixed(4)).join(",");
-      const lons = coords.map(([, lon]) => lon.toFixed(4)).join(",");
+      const lats = unique.map(([lat]) => lat.toFixed(4)).join(",");
+      const lons = unique.map(([, lon]) => lon.toFixed(4)).join(",");
       const url = `${OPEN_METEO_URL}?latitude=${lats}&longitude=${lons}` +
         `&hourly=cloud_cover&timezone=Pacific%2FAuckland` +
         `&start_date=${dateStr}&end_date=${dateStr}`;
@@ -823,12 +864,13 @@ const Engine = (() => {
       const body = await resp.json();
       // single-coord responses are a bare object; multi-coord an array.
       const entries = Array.isArray(body) ? body : [body];
-      if (entries.length !== coords.length) return null;
-      seriesList = entries.map((entry) => cloudCoverFracs(entry.hourly.cloud_cover));
+      if (entries.length !== unique.length) return null;
+      const perCell = entries.map((entry) => cloudCoverFracs(entry.hourly.cloud_cover));
+      seriesList = cellOf.map((key) => perCell[slot.get(key)]);
     } catch (err) {
       return null;
     }
-    coords.forEach(([lat, lon], i) => writeCache(seriesCacheKey(lat, lon, dateStr), seriesList[i]));
+    coords.forEach((_, i) => writeCache(cellOf[i], seriesList[i]));
     return seriesList;
   }
 
@@ -836,7 +878,7 @@ const Engine = (() => {
     sunPosition, nzEpoch, isoNZ, nzDateStr, loadIndex, ensureCells, inSun,
     scoreTrail, search, candidatesInRange, trailDetail, getCloudCover,
     getCloudSeries, getCloudSeriesBatch, routePlan, haversineKm,
-    rankCompare,
+    rankCompare, nearbyLandmark,
   };
 })();
 

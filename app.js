@@ -36,9 +36,34 @@ const SOURCE_LABELS = {
 const KIND_EMOJI = { beach: "🏖", garden: "🌳", park: "🌳", reserve: "🦜" };
 
 function displayName(r) {
+  if (r.displayLabel) return r.displayLabel;
   if (r.name) return r.name;
   const kind = r.kind || "hike";
   return kind === "hike" ? "Unnamed track" : `Unnamed ${kind}`;
+}
+
+/* Give each result in a list a name you can tell apart: an unnamed place
+ * becomes "Beach near Sumner Esplanade", and a name that repeats in the list
+ * (the sections of one long walkway) gains " · near <landmark>". Sets
+ * r.displayLabel, which displayName prefers. */
+function labelResults(list) {
+  const seen = new Map();
+  for (const r of list) {
+    const key = (r.name || "").trim().toLowerCase();
+    if (key) seen.set(key, (seen.get(key) || 0) + 1);
+  }
+  for (const r of list) {
+    if (r.displayLabel !== undefined || !r.start) continue;
+    const key = (r.name || "").trim().toLowerCase();
+    const unnamed = !key;
+    if (!unnamed && seen.get(key) < 2) { r.displayLabel = null; continue; }
+    const near = Engine.nearbyLandmark(r.start[0], r.start[1],
+      { excludeId: r.id, excludeName: r.name });
+    if (!near) { r.displayLabel = null; continue; }
+    r.displayLabel = unnamed
+      ? `${capitalize(kindNoun(r))} near ${near}`
+      : `${r.name} · near ${near}`;
+  }
 }
 
 /* What to call these things in a sentence. A result set mixes walks, beaches,
@@ -867,14 +892,19 @@ function syncRankToggleUI() {
   syncFilterCount();
 }
 
-function setRankMode(mode) {
+function setRankMode(mode, { rerun = true } = {}) {
   if (mode === rankMode) return;
   rankMode = mode;
   try {
     localStorage.setItem(RANKMODE_STORE_KEY, rankMode);
   } catch (err) { /* private mode etc. — rank mode just won't persist */ }
   syncRankToggleUI();
-  if (lastResults.length) renderResults(lastResults);
+  // re-run rather than re-sort: forecast ranking draws on a wider pool than
+  // the 20 returned, so the two modes can list different spots. Forecasts
+  // are cached, so this is instant. Keeps an area search an area search.
+  if (rerun && lastSearchOpts) {
+    runSearch({ area: !!lastSearchOpts.bounds, reveal: false });
+  }
 }
 
 function renderResults(results) {
@@ -902,6 +932,7 @@ function renderResults(results) {
     return;
   }
   const sorted = sortResults(results);
+  labelResults(sorted);
   showStatus(`${sorted.length} ${listNoun(sorted)} found, sunniest first.`);
 
   lastCardById = new Map();
@@ -925,6 +956,7 @@ function renderMarkers() {
   if (showAllOnMap && lastSearchOpts) {
     list = Engine.candidatesInRange(lastSearchOpts);
     if (list.length > SHOWALL_CAP) { list = list.slice(0, SHOWALL_CAP); truncated = true; }
+    labelResults(list);
   }
   for (const r of list) {
     const marker = makeMarker(r).addTo(markersLayer);
@@ -1723,7 +1755,7 @@ function renderDetail(detail) {
   detailBox.innerHTML = `
     <div class="detail-head">
       <div>
-        <h2>${kind === "hike" ? "" : (KIND_EMOJI[kind] || "📍") + " "}${escapeHtml(displayName(detail))}</h2>
+        <h2>${kind === "hike" ? "" : (KIND_EMOJI[kind] || "📍") + " "}${escapeHtml(displayName(r.displayLabel ? r : detail))}</h2>
         <div class="meta">${sourceBadge(detail.source)}
           ${canopy || ""}
           ${categoryLabel(detail) ? `<span class="chip">${escapeHtml(categoryLabel(detail))}</span>` : ""}
@@ -1978,7 +2010,7 @@ function sunnyNow() {
   // keep the scrubber honest: it drives the shadows, so put it on the same time
   scrub.value = Math.min(+scrub.max, Math.max(+scrub.min, snapped));
   scrubLabel.textContent = minutesToHHMM(+scrub.value);
-  if (!rankLocked) setRankMode("forecast");
+  if (!rankLocked) setRankMode("forecast", { rerun: false }); // searched below
   scheduleShadowUpdate();
   runSearch();
 }
