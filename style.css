@@ -1082,3 +1082,7 @@ input[type="text"] {
 @media (max-width: 800px) {
   .area-search { top: 10px; font-size: 0.8rem; padding: 8px 14px; }
 }
+
+/* the form's labels are uppercase, which turned "1 h" into "1 H" */
+#walk-length .diff span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+#walk-length .diff input:checked + span { font-weight: 600; }

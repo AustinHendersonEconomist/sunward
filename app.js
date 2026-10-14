@@ -1883,9 +1883,40 @@ if (rankTerrainBtn && rankForecastBtn) {
 
 /* ---- more filters -------------------------------------------------------- */
 
+/* ---- walk length chips ----------------------------------------------------
+ * One-tap presets over the min/max walk fields. A preset fills both fields;
+ * typing a custom value un-highlights every chip, so what is lit is always
+ * what will be searched. Picking one searches straight away — it is the
+ * filter people reach for, and a chip that lights up but changes nothing
+ * reads as broken. */
+const walkLenBoxes = [...document.querySelectorAll("#walk-length input")];
+
+function walkLenPreset() {
+  return `${el("min-minutes").value}-${el("max-minutes").value}`;
+}
+
+function syncWalkLenChips() {
+  const now = walkLenPreset();
+  for (const b of walkLenBoxes) b.checked = b.value === now;
+}
+
+for (const b of walkLenBoxes) {
+  b.addEventListener("change", () => {
+    const [lo, hi] = b.value.split("-");
+    el("min-minutes").value = lo;
+    el("max-minutes").value = hi;
+    syncFilterCount();
+    runSearch();
+  });
+}
+for (const id of ["min-minutes", "max-minutes"]) {
+  el(id).addEventListener("input", syncWalkLenChips);
+}
+
 function syncFilterCount() {
-  const n = (el("min-minutes").value ? 1 : 0)
-    + (el("max-minutes").value ? 1 : 0)
+  // a walk length a chip shows is in plain sight; only a custom one is hidden
+  const customLen = !walkLenBoxes.some((b) => b.value === walkLenPreset());
+  const n = (customLen ? 1 : 0)
     + (document.querySelector("#difficulty input:checked") ? 1 : 0)
     + (selectedKinds() ? 1 : 0)
     + (rankMode === "terrain" && !rankLocked ? 1 : 0); // a lock is not a choice

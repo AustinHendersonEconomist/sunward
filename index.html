@@ -67,6 +67,15 @@
             class="unit" aria-hidden="true">min</span></span>
         </label>
       </div>
+      <!-- presets for the min/max walk fields under More filters, which still
+           take any custom value; app.js keeps the two in step -->
+      <div class="diff-label">Walk length</div>
+      <div class="diff-boxes" id="walk-length" role="radiogroup" aria-label="Walk length">
+        <label class="diff"><input type="radio" name="walklen" value="-" checked><span>Any</span></label>
+        <label class="diff"><input type="radio" name="walklen" value="-60"><span>Under 1 h</span></label>
+        <label class="diff"><input type="radio" name="walklen" value="60-180"><span>1–3 h</span></label>
+        <label class="diff"><input type="radio" name="walklen" value="180-"><span>3 h+</span></label>
+      </div>
       <details id="more-filters" class="more-filters">
         <summary>More filters <span id="filter-count" class="filter-count" hidden></span></summary>
       <div class="field-row">
